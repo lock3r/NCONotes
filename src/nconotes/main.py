@@ -53,13 +53,27 @@ class ResizableTextEdit(QGraphicsProxyWidget):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
 
+        # Border width for selection/movement
+        self.border_width = 3
+
         # Resize handle
         self.resize_handle = None
         self.is_resizing = False
         self.resize_start_pos = None
         self.resize_start_size = None
 
+    def boundingRect(self):
+        """Include border in bounding rect"""
+        base_rect = super().boundingRect()
+        return base_rect.adjusted(-self.border_width, -self.border_width,
+                                   self.border_width, self.border_width)
+
     def paint(self, painter, option, widget):
+        # Draw subtle gray border
+        rect = self.subWidgetRect(self.text_edit)
+        painter.setPen(QPen(QColor(180, 180, 180), self.border_width))
+        painter.drawRect(rect)
+
         super().paint(painter, option, widget)
 
         # Draw resize handle when selected
@@ -96,6 +110,14 @@ class ResizableTextEdit(QGraphicsProxyWidget):
                 event.accept()
                 return
 
+            # Check if clicking on border (for selection/movement)
+            text_rect = self.subWidgetRect(self.text_edit)
+            if not text_rect.contains(event.pos()):
+                # Click is on border - select and allow moving
+                self.setSelected(True)
+                super().mousePressEvent(event)
+                return
+
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
@@ -103,6 +125,9 @@ class ResizableTextEdit(QGraphicsProxyWidget):
             delta = event.scenePos() - self.resize_start_pos
             new_width = max(100, self.resize_start_size.width() + delta.x())
             new_height = max(50, self.resize_start_size.height() + delta.y())
+
+            # Notify Qt that geometry is about to change
+            self.prepareGeometryChange()
             self.text_edit.setFixedSize(int(new_width), int(new_height))
             self.update()
             event.accept()
