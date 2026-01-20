@@ -1,0 +1,20 @@
+[project]
+name = "nconotes"
+version = "0.1.0"
+description = "No Cognitive Overflow Notes - a minimalistic and unstructured note-taking application"
+authors = [
+    {name = "lock3r"}
+]
+license = {text = "GPL-3.0-or-later"}
+readme = "README.md"
+requires-python = ">=3.10,<3.15"
+dependencies = [
+    "pyside6 (>=6.10.1,<7.0.0)"
+]
+
+[tool.poetry]
+packages = [{include = "nconotes", from = "src"}]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
