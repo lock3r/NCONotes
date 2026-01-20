@@ -152,7 +152,7 @@ class ResizableTextEdit(QGraphicsProxyWidget):
             if not text_edit_geom.contains(container_pos.toPoint()):
                 # Clicking on border - select and allow moving
                 self.setSelected(True)
-                event.accept()
+                self.update()  # Force repaint to show handle
                 super().mousePressEvent(event)
                 return
 
@@ -166,7 +166,13 @@ class ResizableTextEdit(QGraphicsProxyWidget):
 
             # Notify Qt that geometry is about to change
             self.prepareGeometryChange()
+
+            # Resize container widget
             self.container.setFixedSize(int(new_width), int(new_height))
+
+            # Resize the proxy widget itself to match container
+            self.resize(int(new_width), int(new_height))
+
             self.update()
             event.accept()
             return
