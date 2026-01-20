@@ -269,14 +269,22 @@ class InfiniteCanvas(QGraphicsView):
             # Convert view coordinates to scene coordinates
             scene_pos = self.mapToScene(event.pos())
 
-            # Create text editor at click position
-            text_editor = ResizableTextEdit(scene_pos)
-            self.scene.addItem(text_editor)
+            # Check if there's already an item at this position
+            item = self.scene.itemAt(scene_pos, self.transform())
 
-            # Focus the new editor
-            text_editor.text_edit.setFocus()
+            # Only create a new editor if clicking on empty canvas
+            if item is None:
+                # Create text editor at click position
+                text_editor = ResizableTextEdit(scene_pos)
+                self.scene.addItem(text_editor)
 
-            event.accept()
+                # Focus the new editor
+                text_editor.text_edit.setFocus()
+
+                event.accept()
+            else:
+                # Let the item handle the double-click (e.g., text selection)
+                super().mouseDoubleClickEvent(event)
 
     def dragEnterEvent(self, event):
         """Accept image drops"""
