@@ -34,18 +34,40 @@ class ResizableTextEdit(QGraphicsProxyWidget):
     def __init__(self, pos, size=None):
         super().__init__()
 
+        # Border width for selection/movement
+        self.border_width = 3
+
+        # Create container widget with border
+        from PySide6.QtWidgets import QVBoxLayout
+        self.container = QWidget()
+        self.container.setStyleSheet(f"""
+            QWidget {{
+                background-color: rgb(180, 180, 180);
+                padding: {self.border_width}px;
+            }}
+        """)
+
+        # Create text edit
         self.text_edit = QTextEdit()
         self.text_edit.setPlaceholderText("Start typing...")
-
-        # Enable spell checking
         self.text_edit.setAcceptRichText(True)
 
-        if size:
-            self.text_edit.setFixedSize(int(size[0]), int(size[1]))
-        else:
-            self.text_edit.setFixedSize(300, 200)
+        # Layout with no margins inside the styled container
+        layout = QVBoxLayout(self.container)
+        layout.setContentsMargins(self.border_width, self.border_width,
+                                   self.border_width, self.border_width)
+        layout.setSpacing(0)
+        layout.addWidget(self.text_edit)
 
-        self.setWidget(self.text_edit)
+        # Set container size
+        if size:
+            total_width = int(size[0]) + 2 * self.border_width
+            total_height = int(size[1]) + 2 * self.border_width
+            self.container.setFixedSize(total_width, total_height)
+        else:
+            self.container.setFixedSize(306, 206)  # 300x200 + borders
+
+        self.setWidget(self.container)
         self.setPos(pos)
 
         # Make it movable and selectable
@@ -53,27 +75,13 @@ class ResizableTextEdit(QGraphicsProxyWidget):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
 
-        # Border width for selection/movement
-        self.border_width = 3
-
         # Resize handle
         self.resize_handle = None
         self.is_resizing = False
         self.resize_start_pos = None
         self.resize_start_size = None
 
-    def boundingRect(self):
-        """Include border in bounding rect"""
-        base_rect = super().boundingRect()
-        return base_rect.adjusted(-self.border_width, -self.border_width,
-                                   self.border_width, self.border_width)
-
     def paint(self, painter, option, widget):
-        # Draw subtle gray border
-        rect = self.subWidgetRect(self.text_edit)
-        painter.setPen(QPen(QColor(180, 180, 180), self.border_width))
-        painter.drawRect(rect)
-
         super().paint(painter, option, widget)
 
         # Draw resize handle when selected
@@ -104,18 +112,10 @@ class ResizableTextEdit(QGraphicsProxyWidget):
                 self.is_resizing = True
                 self.resize_start_pos = event.scenePos()
                 self.resize_start_size = QSizeF(
-                    self.text_edit.width(),
-                    self.text_edit.height()
+                    self.container.width(),
+                    self.container.height()
                 )
                 event.accept()
-                return
-
-            # Check if clicking on border (for selection/movement)
-            text_rect = self.subWidgetRect(self.text_edit)
-            if not text_rect.contains(event.pos()):
-                # Click is on border - select and allow moving
-                self.setSelected(True)
-                super().mousePressEvent(event)
                 return
 
         super().mousePressEvent(event)
@@ -123,12 +123,12 @@ class ResizableTextEdit(QGraphicsProxyWidget):
     def mouseMoveEvent(self, event):
         if self.is_resizing:
             delta = event.scenePos() - self.resize_start_pos
-            new_width = max(100, self.resize_start_size.width() + delta.x())
-            new_height = max(50, self.resize_start_size.height() + delta.y())
+            new_width = max(100 + 2 * self.border_width, self.resize_start_size.width() + delta.x())
+            new_height = max(50 + 2 * self.border_width, self.resize_start_size.height() + delta.y())
 
             # Notify Qt that geometry is about to change
             self.prepareGeometryChange()
-            self.text_edit.setFixedSize(int(new_width), int(new_height))
+            self.container.setFixedSize(int(new_width), int(new_height))
             self.update()
             event.accept()
             return
