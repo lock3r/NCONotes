@@ -40,19 +40,24 @@ class ResizableTextEdit(QGraphicsProxyWidget):
         # Create container widget with border
         from PySide6.QtWidgets import QVBoxLayout
         self.container = QWidget()
-        self.container.setStyleSheet(f"""
-            QWidget {{
+        self.container.setStyleSheet("""
+            QWidget {
                 background-color: rgb(180, 180, 180);
-                padding: {self.border_width}px;
-            }}
+            }
         """)
 
-        # Create text edit
+        # Create text edit with white background
         self.text_edit = QTextEdit()
         self.text_edit.setPlaceholderText("Start typing...")
         self.text_edit.setAcceptRichText(True)
+        self.text_edit.setStyleSheet("""
+            QTextEdit {
+                background-color: white;
+                border: none;
+            }
+        """)
 
-        # Layout with no margins inside the styled container
+        # Layout with margins to create border space
         layout = QVBoxLayout(self.container)
         layout.setContentsMargins(self.border_width, self.border_width,
                                    self.border_width, self.border_width)
@@ -68,6 +73,9 @@ class ResizableTextEdit(QGraphicsProxyWidget):
             self.container.setFixedSize(306, 206)  # 300x200 + borders
 
         self.setWidget(self.container)
+
+        # Install event filter to intercept text_edit events
+        self.text_edit.viewport().installEventFilter(self)
         self.setPos(pos)
 
         # Make it movable and selectable
@@ -80,6 +88,25 @@ class ResizableTextEdit(QGraphicsProxyWidget):
         self.is_resizing = False
         self.resize_start_pos = None
         self.resize_start_size = None
+
+    def eventFilter(self, obj, event):
+        """Filter events on text_edit viewport to handle border clicks"""
+        if obj == self.text_edit.viewport() and event.type() == event.Type.MouseButtonPress:
+            if event.button() == Qt.MouseButton.LeftButton:
+                # Convert viewport coordinates to container coordinates
+                viewport_pos = event.pos()
+                text_edit_pos = self.text_edit.mapFromGlobal(
+                    self.text_edit.viewport().mapToGlobal(viewport_pos)
+                )
+
+                # Check if click is outside text_edit geometry (on border)
+                text_rect = self.text_edit.rect()
+                if not text_rect.contains(text_edit_pos):
+                    # Click on border - select widget
+                    self.setSelected(True)
+                    return True  # Block event from reaching text edit
+
+        return super().eventFilter(obj, event)
 
     def paint(self, painter, option, widget):
         super().paint(painter, option, widget)
@@ -116,6 +143,17 @@ class ResizableTextEdit(QGraphicsProxyWidget):
                     self.container.height()
                 )
                 event.accept()
+                return
+
+            # Check if clicking on gray border (outside text_edit area)
+            text_edit_geom = self.text_edit.geometry()
+            # Convert event pos to container coordinates
+            container_pos = event.pos()
+            if not text_edit_geom.contains(container_pos.toPoint()):
+                # Clicking on border - select and allow moving
+                self.setSelected(True)
+                event.accept()
+                super().mousePressEvent(event)
                 return
 
         super().mousePressEvent(event)
