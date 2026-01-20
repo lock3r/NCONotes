@@ -38,13 +38,15 @@ class ResizableTextEdit(QGraphicsProxyWidget):
         self.border_width = 3
 
         # Create container widget with border
-        from PySide6.QtWidgets import QVBoxLayout
+        from PySide6.QtWidgets import QVBoxLayout, QSizePolicy
         self.container = QWidget()
         self.container.setStyleSheet("""
             QWidget {
                 background-color: rgb(180, 180, 180);
             }
         """)
+        # Allow container to resize freely
+        self.container.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
 
         # Create text edit with white background
         self.text_edit = QTextEdit()
@@ -68,9 +70,9 @@ class ResizableTextEdit(QGraphicsProxyWidget):
         if size:
             total_width = int(size[0]) + 2 * self.border_width
             total_height = int(size[1]) + 2 * self.border_width
-            self.container.setFixedSize(total_width, total_height)
+            self.container.resize(total_width, total_height)
         else:
-            self.container.setFixedSize(306, 206)  # 300x200 + borders
+            self.container.resize(306, 206)  # 300x200 + borders
 
         self.setWidget(self.container)
 
@@ -168,7 +170,7 @@ class ResizableTextEdit(QGraphicsProxyWidget):
             self.prepareGeometryChange()
 
             # Resize container widget
-            self.container.setFixedSize(int(new_width), int(new_height))
+            self.container.resize(int(new_width), int(new_height))
 
             # Resize the proxy widget itself to match container
             self.resize(int(new_width), int(new_height))
