@@ -168,6 +168,10 @@ class InfiniteCanvas(QGraphicsView):
         # Enable dragging
         self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
 
+        # Enable scrollbars for navigation
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
         # Smooth rendering
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
@@ -177,6 +181,54 @@ class InfiniteCanvas(QGraphicsView):
 
         # Accept drops
         self.setAcceptDrops(True)
+
+        # Track panning state
+        self.is_panning = False
+        self.pan_start_pos = None
+
+    def mousePressEvent(self, event):
+        """Handle mouse press for panning (Ctrl+drag or middle-mouse)"""
+        if (event.button() == Qt.MouseButton.LeftButton and
+            event.modifiers() == Qt.KeyboardModifier.ControlModifier) or \
+           event.button() == Qt.MouseButton.MiddleButton:
+            # Start panning
+            self.is_panning = True
+            self.pan_start_pos = event.pos()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        """Handle mouse move for panning"""
+        if self.is_panning and self.pan_start_pos is not None:
+            # Calculate delta and pan the view
+            delta = event.pos() - self.pan_start_pos
+            self.pan_start_pos = event.pos()
+
+            # Move scrollbars (negative because we're moving the viewport)
+            self.horizontalScrollBar().setValue(
+                self.horizontalScrollBar().value() - delta.x()
+            )
+            self.verticalScrollBar().setValue(
+                self.verticalScrollBar().value() - delta.y()
+            )
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        """Handle mouse release for panning"""
+        if self.is_panning and (
+            event.button() == Qt.MouseButton.LeftButton or
+            event.button() == Qt.MouseButton.MiddleButton):
+            # End panning
+            self.is_panning = False
+            self.pan_start_pos = None
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            event.accept()
+        else:
+            super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event):
         """Double-click to create a text editor"""
