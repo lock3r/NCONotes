@@ -20,12 +20,13 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout,
     QWidget, QPushButton, QTreeWidget, QTreeWidgetItem, QSplitter,
     QGraphicsPixmapItem, QGraphicsRectItem, QMessageBox, QToolBar,
-    QGraphicsItem, QInputDialog
+    QGraphicsItem, QInputDialog, QDialog, QListWidget, QStackedWidget,
+    QLabel, QComboBox, QFormLayout
 )
 from PySide6.QtCore import Qt, QRectF, QPointF, QSettings
 from PySide6.QtGui import (
     QPixmap, QImage, QPainter, QColor, QPen, QBrush,
-    QTransform, QAction, QKeySequence, QUndoStack, QUndoCommand
+    QTransform, QAction, QKeySequence, QUndoStack, QUndoCommand, QIcon
 )
 
 from nconotes.models import ImageData
@@ -293,6 +294,101 @@ class InfiniteCanvas(QGraphicsView):
             super().wheelEvent(event)
 
 
+class SettingsWindow(QDialog):
+    """Settings dialog with category sidebar and content panels"""
+
+    # Scale options with their multipliers
+    SCALE_OPTIONS = {
+        "Very Small": 0.8,
+        "Small": 1.0,
+        "Big": 1.3,
+        "Very Big": 1.8
+    }
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Settings")
+        self.setModal(True)
+        self.resize(600, 400)
+
+        self.settings = QSettings("NCONotes", "NCONotes")
+        self.init_ui()
+
+    def init_ui(self):
+        """Initialize the settings UI with category sidebar and content panel"""
+        layout = QHBoxLayout(self)
+
+        # Left sidebar - categories
+        self.category_list = QListWidget()
+        self.category_list.setMaximumWidth(150)
+        self.category_list.addItem("UI")
+        self.category_list.currentRowChanged.connect(self.change_category)
+        layout.addWidget(self.category_list)
+
+        # Right panel - stacked widget for different category content
+        self.content_stack = QStackedWidget()
+        layout.addWidget(self.content_stack)
+
+        # Add UI category panel
+        self.ui_panel = self.create_ui_panel()
+        self.content_stack.addWidget(self.ui_panel)
+
+        # Select first category by default
+        self.category_list.setCurrentRow(0)
+
+    def create_ui_panel(self):
+        """Create the UI settings panel with scale dropdown"""
+        panel = QWidget()
+        layout = QFormLayout(panel)
+
+        # Scale dropdown
+        self.scale_combo = QComboBox()
+        for scale_name in self.SCALE_OPTIONS.keys():
+            self.scale_combo.addItem(scale_name)
+
+        # Load current scale from settings
+        current_scale = self.settings.value("ui_scale", 1.0, type=float)
+        # Find matching scale option
+        for i, (name, scale) in enumerate(self.SCALE_OPTIONS.items()):
+            if abs(scale - current_scale) < 0.01:  # Float comparison tolerance
+                self.scale_combo.setCurrentIndex(i)
+                break
+
+        # Connect to immediate apply
+        self.scale_combo.currentTextChanged.connect(self.apply_scale)
+
+        layout.addRow("UI Scale:", self.scale_combo)
+
+        return panel
+
+    def change_category(self, index):
+        """Switch to the selected category panel"""
+        self.content_stack.setCurrentIndex(index)
+
+    def apply_scale(self, scale_name):
+        """Apply the selected scale immediately"""
+        scale_value = self.SCALE_OPTIONS[scale_name]
+        self.settings.setValue("ui_scale", scale_value)
+
+        # Get the QApplication instance and apply scale
+        app = QApplication.instance()
+        if app:
+            # Reset to default first
+            app.setStyleSheet("")
+            # Apply new scale using stylesheet font scaling
+            app.setStyleSheet(f"""
+                * {{
+                    font-size: {int(10 * scale_value)}pt;
+                }}
+                QTreeWidget, QListWidget {{
+                    font-size: {int(10 * scale_value)}pt;
+                }}
+                QTextEdit {{
+                    font-size: {int(11 * scale_value)}pt;
+                }}
+            """)
+
+
 class NCONotesWindow(QMainWindow):
     """Main application window for NCONotes"""
 
@@ -348,6 +444,16 @@ class NCONotesWindow(QMainWindow):
         redo_action.setShortcut(QKeySequence.StandardKey.Redo)
         toolbar.addAction(redo_action)
 
+        # Add spacer to push settings button to the right
+        spacer = QWidget()
+        spacer.setSizePolicy(QWidget.SizePolicy.Expanding, QWidget.SizePolicy.Preferred)
+        toolbar.addWidget(spacer)
+
+        # Settings button (anchored to right)
+        settings_action = QAction(QIcon("icons/settings_icon_black.svg"), "Settings", self)
+        settings_action.triggered.connect(self.open_settings)
+        toolbar.addAction(settings_action)
+
         # Main layout
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -379,6 +485,11 @@ class NCONotesWindow(QMainWindow):
         splitter.setSizes([200, 1000])
 
         main_layout.addWidget(splitter)
+
+    def open_settings(self):
+        """Open the settings dialog"""
+        settings_dialog = SettingsWindow(self)
+        settings_dialog.exec()
 
     def new_notebook(self):
         """Create a new notebook with a default page.
@@ -621,6 +732,22 @@ class NCONotesWindow(QMainWindow):
 def main():
     """Main entry point for the application."""
     app = QApplication(sys.argv)
+
+    # Load and apply saved UI scale
+    settings = QSettings("NCONotes", "NCONotes")
+    scale = settings.value("ui_scale", 1.0, type=float)
+    app.setStyleSheet(f"""
+        * {{
+            font-size: {int(10 * scale)}pt;
+        }}
+        QTreeWidget, QListWidget {{
+            font-size: {int(10 * scale)}pt;
+        }}
+        QTextEdit {{
+            font-size: {int(11 * scale)}pt;
+        }}
+    """)
+
     window = NCONotesWindow()
     window.show()
     sys.exit(app.exec())
