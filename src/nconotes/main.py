@@ -13,6 +13,7 @@ Features:
 import sys
 import json
 import os
+import uuid
 from pathlib import Path
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QGraphicsView, QGraphicsScene,
@@ -27,194 +28,19 @@ from PySide6.QtGui import (
     QTransform, QAction, QKeySequence, QUndoStack, QUndoCommand
 )
 
-
-class ResizableTextEdit(QGraphicsProxyWidget):
-    """A resizable text editor that can be placed on the canvas"""
-
-    def __init__(self, pos, size=None):
-        super().__init__()
-
-        # Border width for selection/movement
-        self.border_width = 3
-
-        # Create container widget with border
-        from PySide6.QtWidgets import QVBoxLayout, QSizePolicy
-        self.container = QWidget()
-        self.container.setStyleSheet("""
-            QWidget {
-                background-color: rgb(180, 180, 180);
-            }
-        """)
-        # Allow container to resize freely
-        self.container.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
-
-        # Create text edit with white background
-        self.text_edit = QTextEdit()
-        self.text_edit.setPlaceholderText("Start typing...")
-        self.text_edit.setAcceptRichText(True)
-        self.text_edit.setStyleSheet("""
-            QTextEdit {
-                background-color: white;
-                border: none;
-            }
-        """)
-
-        # Layout with margins to create border space
-        layout = QVBoxLayout(self.container)
-        layout.setContentsMargins(self.border_width, self.border_width,
-                                   self.border_width, self.border_width)
-        layout.setSpacing(0)
-        layout.addWidget(self.text_edit)
-
-        # Set container size
-        if size:
-            total_width = int(size[0]) + 2 * self.border_width
-            total_height = int(size[1]) + 2 * self.border_width
-            self.container.resize(total_width, total_height)
-        else:
-            self.container.resize(306, 206)  # 300x200 + borders
-
-        self.setWidget(self.container)
-
-        # Install event filter to intercept text_edit events
-        self.text_edit.viewport().installEventFilter(self)
-        self.setPos(pos)
-
-        # Make it movable and selectable
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
-
-        # Resize handle
-        self.resize_handle = None
-        self.is_resizing = False
-        self.resize_start_pos = None
-        self.resize_start_size = None
-
-    def eventFilter(self, obj, event):
-        """Filter events on text_edit viewport to handle border clicks"""
-        if obj == self.text_edit.viewport() and event.type() == event.Type.MouseButtonPress:
-            if event.button() == Qt.MouseButton.LeftButton:
-                # Convert viewport coordinates to container coordinates
-                viewport_pos = event.pos()
-                text_edit_pos = self.text_edit.mapFromGlobal(
-                    self.text_edit.viewport().mapToGlobal(viewport_pos)
-                )
-
-                # Check if click is outside text_edit geometry (on border)
-                text_rect = self.text_edit.rect()
-                if not text_rect.contains(text_edit_pos):
-                    # Click on border - select widget
-                    self.setSelected(True)
-                    return True  # Block event from reaching text edit
-
-        return super().eventFilter(obj, event)
-
-    def paint(self, painter, option, widget):
-        super().paint(painter, option, widget)
-
-        # Draw resize handle when selected
-        if self.isSelected():
-            rect = self.boundingRect()
-            handle_size = 10
-            handle_rect = QRectF(
-                rect.right() - handle_size,
-                rect.bottom() - handle_size,
-                handle_size,
-                handle_size
-            )
-            painter.fillRect(handle_rect, QColor(100, 100, 255))
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            # Check if clicking on resize handle
-            rect = self.boundingRect()
-            handle_size = 10
-            handle_rect = QRectF(
-                rect.right() - handle_size,
-                rect.bottom() - handle_size,
-                handle_size,
-                handle_size
-            )
-
-            if handle_rect.contains(event.pos()):
-                self.is_resizing = True
-                self.resize_start_pos = event.scenePos()
-                self.resize_start_size = QSizeF(
-                    self.container.width(),
-                    self.container.height()
-                )
-                event.accept()
-                return
-
-            # Check if clicking on gray border (outside text_edit area)
-            text_edit_geom = self.text_edit.geometry()
-            # Convert event pos to container coordinates
-            container_pos = event.pos()
-            if not text_edit_geom.contains(container_pos.toPoint()):
-                # Clicking on border - select and allow moving
-                self.setSelected(True)
-                self.update()  # Force repaint to show handle
-                super().mousePressEvent(event)
-                return
-
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if self.is_resizing:
-            delta = event.scenePos() - self.resize_start_pos
-            new_width = max(100 + 2 * self.border_width, self.resize_start_size.width() + delta.x())
-            new_height = max(50 + 2 * self.border_width, self.resize_start_size.height() + delta.y())
-
-            # Notify Qt that geometry is about to change
-            self.prepareGeometryChange()
-
-            # Resize container widget
-            self.container.resize(int(new_width), int(new_height))
-
-            # Resize the proxy widget itself to match container
-            self.resize(int(new_width), int(new_height))
-
-            self.update()
-            event.accept()
-            return
-
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        if self.is_resizing:
-            self.is_resizing = False
-            event.accept()
-            return
-
-        super().mouseReleaseEvent(event)
-
-    def to_dict(self):
-        """Serialize to dictionary for saving"""
-        return {
-            'type': 'text',
-            'x': self.pos().x(),
-            'y': self.pos().y(),
-            'width': self.text_edit.width(),
-            'height': self.text_edit.height(),
-            'content': self.text_edit.toHtml()
-        }
-
-    @staticmethod
-    def from_dict(data):
-        """Deserialize from dictionary"""
-        pos = QPointF(data['x'], data['y'])
-        size = (data['width'], data['height'])
-        widget = ResizableTextEdit(pos, size)
-        widget.text_edit.setHtml(data['content'])
-        return widget
+from nconotes.models import TextBoxData, ImageData
+from nconotes.widgets import ResizableTextEdit
 
 
 class ResizableImage(QGraphicsPixmapItem):
     """A resizable, movable image on the canvas"""
 
-    def __init__(self, pixmap, pos):
+    def __init__(self, pixmap, pos, image_id=None):
         super().__init__(pixmap)
+
+        # Generate new UUID if not provided (new image), use existing if provided (loading)
+        self.image_id = image_id if image_id else str(uuid.uuid4())
+        self.original_pixmap = pixmap
 
         self.setPos(pos)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
@@ -293,20 +119,38 @@ class ResizableImage(QGraphicsPixmapItem):
 
     def to_dict(self):
         """Serialize to dictionary for saving"""
-        # Save pixmap as PNG data
-        pixmap = self.pixmap()
-        byte_array = pixmap.toImage().bits().asstring(pixmap.width() * pixmap.height() * 4)
+        pixmap = self.original_pixmap
+        data = ImageData(
+            image_id=self.image_id,
+            x=self.pos().x(),
+            y=self.pos().y(),
+            scale=self.current_scale,
+            width=pixmap.width(),
+            height=pixmap.height()
+        )
+        return data.to_dict()
 
-        return {
-            'type': 'image',
-            'x': self.pos().x(),
-            'y': self.pos().y(),
-            'scale': self.current_scale,
-            'width': pixmap.width(),
-            'height': pixmap.height(),
-            # Note: In production, save to file and store path instead
-            'data': byte_array.hex() if byte_array else ''
-        }
+    def save_to_file(self, images_dir):
+        """Save image to disk as PNG"""
+        images_dir.mkdir(exist_ok=True)
+        image_path = images_dir / f"{self.image_id}.png"
+        self.original_pixmap.save(str(image_path), "PNG")
+
+    @staticmethod
+    def from_dict(data, images_dir):
+        """Deserialize from dictionary and load image from disk"""
+        image_data = ImageData.from_dict(data)
+        image_path = images_dir / f"{image_data.image_id}.png"
+
+        if not image_path.exists():
+            raise FileNotFoundError(f"Image file not found: {image_path}")
+
+        pixmap = QPixmap(str(image_path))
+        pos = QPointF(image_data.x, image_data.y)
+        widget = ResizableImage(pixmap, pos, image_id=image_data.image_id)
+        widget.setScale(image_data.scale)
+        widget.current_scale = image_data.scale
+        return widget
 
 
 class InfiniteCanvas(QGraphicsView):
@@ -350,7 +194,7 @@ class InfiniteCanvas(QGraphicsView):
                 self.scene.addItem(text_editor)
 
                 # Focus the new editor
-                text_editor.text_edit.setFocus()
+                text_editor.text_area.text_edit.setFocus()
 
                 event.accept()
             else:
@@ -483,17 +327,29 @@ class NCONotesWindow(QMainWindow):
         main_layout.addWidget(splitter)
 
     def new_notebook(self):
-        """Create a new notebook"""
+        """Create a new notebook with a default page.
+
+        Every notebook gets a mandatory default page (pages[0]) that represents
+        the notebook itself. This page is automatically loaded when the notebook
+        is selected and never appears in the page list UI.
+        """
         name, ok = QInputDialog.getText(self, "New Notebook", "Notebook name:")
         if ok and name:
             notebook_path = self.notebooks_dir / name
             notebook_path.mkdir(exist_ok=True)
             (notebook_path / "pages").mkdir(exist_ok=True)
 
-            # Save metadata
+            # Create default page (pages[0]) that represents the notebook itself
+            default_page_id = "page_0"
+            default_page_data = {'items': []}
+            page_path = notebook_path / "pages" / f"{default_page_id}.json"
+            with open(page_path, 'w') as f:
+                json.dump(default_page_data, f, indent=2)
+
+            # Save metadata with default page
             metadata = {
                 'name': name,
-                'pages': []
+                'pages': [{'id': default_page_id, 'name': name}]
             }
             with open(notebook_path / "notebook.json", 'w') as f:
                 json.dump(metadata, f, indent=2)
@@ -541,13 +397,27 @@ class NCONotesWindow(QMainWindow):
                 self.notebook_list.addItem(item.name)
 
     def on_notebook_selected(self, current, previous):
-        """Handle notebook selection"""
+        """Handle notebook selection.
+
+        When a notebook is selected, automatically loads the default page (page_0).
+        This makes the notebook immediately ready for work without requiring the
+        user to manually select a page first.
+        """
         if current:
             self.current_notebook = current.text()
             self.load_pages()
 
+            # Auto-load the default page (pages[0])
+            self.current_page = "page_0"
+            self.load_page_content("page_0")
+
     def load_pages(self):
-        """Load pages for current notebook"""
+        """Load pages for current notebook into the page list UI.
+
+        Skips pages[0] (the default page) since it's accessed by selecting
+        the notebook itself, not from the page list. Only user-created pages
+        (pages[1], pages[2], etc.) appear in the list.
+        """
         self.page_list.clear()
 
         if not self.current_notebook:
@@ -557,7 +427,8 @@ class NCONotesWindow(QMainWindow):
         with open(notebook_path / "notebook.json", 'r') as f:
             metadata = json.load(f)
 
-        for page in metadata['pages']:
+        # Skip pages[0] (default page) - it's accessed by selecting the notebook
+        for page in metadata['pages'][1:]:
             self.page_list.addItem(page['name'])
 
     def on_page_selected(self, current, previous):
@@ -599,17 +470,27 @@ class NCONotesWindow(QMainWindow):
         with open(page_path, 'r') as f:
             page_data = json.load(f)
 
+        images_dir = notebook_path / "images"
+
         # Restore items
         for item_data in page_data.get('items', []):
             if item_data['type'] == 'text':
                 item = ResizableTextEdit.from_dict(item_data)
                 self.canvas.scene.addItem(item)
-            # Image restoration would go here (skipped for brevity)
+            elif item_data['type'] == 'image':
+                try:
+                    item = ResizableImage.from_dict(item_data, images_dir)
+                    self.canvas.scene.addItem(item)
+                except FileNotFoundError as e:
+                    print(f"Warning: {e}")
 
     def save_page(self):
         """Save current page"""
         if not self.current_page or not self.current_notebook:
             return
+
+        notebook_path = self.notebooks_dir / self.current_notebook
+        images_dir = notebook_path / "images"
 
         # Collect all items
         items = []
@@ -617,10 +498,10 @@ class NCONotesWindow(QMainWindow):
             if isinstance(item, ResizableTextEdit):
                 items.append(item.to_dict())
             elif isinstance(item, ResizableImage):
+                item.save_to_file(images_dir)
                 items.append(item.to_dict())
 
         # Save to file
-        notebook_path = self.notebooks_dir / self.current_notebook
         page_path = notebook_path / "pages" / f"{self.current_page}.json"
 
         page_data = {'items': items}
