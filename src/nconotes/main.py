@@ -388,6 +388,13 @@ class SettingsWindow(QDialog):
                 }}
             """)
 
+            # Force update all existing widgets to pick up the new style
+            for widget in app.allWidgets():
+                widget.update()
+                # For QTextEdit widgets, force a font refresh
+                if isinstance(widget, QTextEdit):
+                    widget.setStyleSheet(widget.styleSheet())
+
 
 class NCONotesWindow(QMainWindow):
     """Main application window for NCONotes"""
