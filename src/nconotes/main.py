@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QRectF, QPointF, QSettings
 from PySide6.QtGui import (
     QPixmap, QImage, QPainter, QColor, QPen, QBrush,
-    QTransform, QAction, QKeySequence, QUndoStack, QUndoCommand, QIcon, QFont, QTextCursor
+    QTransform, QAction, QKeySequence, QUndoStack, QUndoCommand, QIcon, QFont
 )
 
 from nconotes.models import ImageData
@@ -388,34 +388,14 @@ class SettingsWindow(QDialog):
                 }}
             """)
 
-            # Update existing text editors in the canvas
+            # Update existing text editors on the current page
             # Get the main window (parent of this dialog)
             if self.parent():
                 main_window = self.parent()
                 if hasattr(main_window, 'canvas'):
                     for item in main_window.canvas.scene.items():
                         if isinstance(item, ResizableTextEdit):
-                            text_edit = item.text_area.text_edit
-
-                            # Create new font with scaled size
-                            font = text_edit.font()
-                            font.setPointSize(int(11 * scale_value))
-
-                            # Set as default font for new text
-                            text_edit.setFont(font)
-                            text_edit.document().setDefaultFont(font)
-
-                            # Apply font to all existing text using cursor
-                            cursor = QTextCursor(text_edit.document())
-                            cursor.beginEditBlock()
-                            cursor.select(QTextCursor.SelectionType.Document)
-
-                            # Create char format with only font size set, preserving other formatting
-                            char_format = cursor.charFormat()
-                            char_format.setFontPointSize(11 * scale_value)
-                            cursor.mergeCharFormat(char_format)
-
-                            cursor.endEditBlock()
+                            item.text_area.update_font_size()
 
 
 class NCONotesWindow(QMainWindow):

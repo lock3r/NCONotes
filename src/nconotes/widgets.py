@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QWidget, QTextEdit, QVBoxLayout, QGraphicsProxyWidget, QGraphicsItem
 )
 from PySide6.QtCore import Qt, QRectF, QPointF, QSizeF, QSettings
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QTextCursor
 
 from nconotes.models import TextBoxData
 
@@ -87,6 +87,31 @@ class TextAreaWidget(QWidget):
     def set_content(self, html):
         """Set HTML content in text editor"""
         self.text_edit.setHtml(html)
+
+    def update_font_size(self):
+        """Update font size of all existing text to match current UI scale"""
+        settings = QSettings("NCONotes", "NCONotes")
+        scale = settings.value("ui_scale", 1.0, type=float)
+
+        # Create new font with scaled size
+        font = self.text_edit.font()
+        font.setPointSize(int(11 * scale))
+
+        # Set as default font for new text
+        self.text_edit.setFont(font)
+        self.text_edit.document().setDefaultFont(font)
+
+        # Apply font to all existing text using cursor
+        cursor = QTextCursor(self.text_edit.document())
+        cursor.beginEditBlock()
+        cursor.select(QTextCursor.SelectionType.Document)
+
+        # Create char format with only font size set, preserving other formatting
+        char_format = cursor.charFormat()
+        char_format.setFontPointSize(11 * scale)
+        cursor.mergeCharFormat(char_format)
+
+        cursor.endEditBlock()
 
 
 class ResizableTextEdit(QGraphicsProxyWidget):
@@ -269,4 +294,6 @@ class ResizableTextEdit(QGraphicsProxyWidget):
         size = (text_data.width, text_data.height)
         widget = ResizableTextEdit(pos, size)
         widget.text_area.set_content(text_data.content)
+        # Update font size to match current UI scale
+        widget.text_area.update_font_size()
         return widget
