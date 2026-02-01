@@ -17,18 +17,18 @@ import uuid
 from pathlib import Path
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QGraphicsView, QGraphicsScene,
-    QGraphicsProxyWidget, QTextEdit, QVBoxLayout, QHBoxLayout,
-    QWidget, QPushButton, QListWidget, QSplitter, QFileDialog,
+    QVBoxLayout, QHBoxLayout,
+    QWidget, QPushButton, QTreeWidget, QTreeWidgetItem, QSplitter,
     QGraphicsPixmapItem, QGraphicsRectItem, QMessageBox, QToolBar,
     QGraphicsItem, QInputDialog
 )
-from PySide6.QtCore import Qt, QRectF, QPointF, QSizeF, Signal
+from PySide6.QtCore import Qt, QRectF, QPointF, QSettings
 from PySide6.QtGui import (
     QPixmap, QImage, QPainter, QColor, QPen, QBrush,
     QTransform, QAction, QKeySequence, QUndoStack, QUndoCommand
 )
 
-from nconotes.models import TextBoxData, ImageData
+from nconotes.models import ImageData
 from nconotes.widgets import ResizableTextEdit
 
 
@@ -255,8 +255,12 @@ class NCONotesWindow(QMainWindow):
         # Undo stack
         self.undo_stack = QUndoStack(self)
 
+        # Settings for persisting UI state
+        self.settings = QSettings("NCONotes", "NCONotes")
+
         self.init_ui()
         self.load_notebooks()
+        self.restore_tree_state()
 
     def init_ui(self):
         """Initialize the user interface"""
@@ -305,15 +309,13 @@ class NCONotesWindow(QMainWindow):
         sidebar = QWidget()
         sidebar_layout = QVBoxLayout(sidebar)
 
-        # Notebook list
-        self.notebook_list = QListWidget()
-        self.notebook_list.currentItemChanged.connect(self.on_notebook_selected)
-        sidebar_layout.addWidget(self.notebook_list)
-
-        # Page list
-        self.page_list = QListWidget()
-        self.page_list.currentItemChanged.connect(self.on_page_selected)
-        sidebar_layout.addWidget(self.page_list)
+        # Notebook tree (notebooks with their pages)
+        self.notebook_tree = QTreeWidget()
+        self.notebook_tree.setHeaderHidden(True)
+        self.notebook_tree.currentItemChanged.connect(self.on_tree_item_selected)
+        self.notebook_tree.itemExpanded.connect(self.save_tree_state)
+        self.notebook_tree.itemCollapsed.connect(self.save_tree_state)
+        sidebar_layout.addWidget(self.notebook_tree)
 
         splitter.addWidget(sidebar)
 
@@ -386,75 +388,72 @@ class NCONotesWindow(QMainWindow):
             with open(page_path, 'w') as f:
                 json.dump(page_data, f, indent=2)
 
-            self.load_pages()
+            self.load_notebooks()
 
     def load_notebooks(self):
-        """Load all notebooks"""
-        self.notebook_list.clear()
+        """Load all notebooks and their pages into the tree"""
+        self.notebook_tree.clear()
 
         for item in self.notebooks_dir.iterdir():
             if item.is_dir() and (item / "notebook.json").exists():
-                self.notebook_list.addItem(item.name)
+                # Create notebook item
+                notebook_item = QTreeWidgetItem([item.name])
+                notebook_item.setData(0, Qt.ItemDataRole.UserRole, {
+                    'type': 'notebook',
+                    'notebook_name': item.name
+                })
+                self.notebook_tree.addTopLevelItem(notebook_item)
 
-    def on_notebook_selected(self, current, previous):
-        """Handle notebook selection.
+                # Load pages for this notebook
+                notebook_path = self.notebooks_dir / item.name
+                with open(notebook_path / "notebook.json", 'r') as f:
+                    metadata = json.load(f)
 
-        When a notebook is selected, automatically loads the default page (page_0).
-        This makes the notebook immediately ready for work without requiring the
-        user to manually select a page first.
+                # Add pages (skip page_0 which represents the notebook itself)
+                for page in metadata['pages'][1:]:
+                    page_item = QTreeWidgetItem([page['name']])
+                    page_item.setData(0, Qt.ItemDataRole.UserRole, {
+                        'type': 'page',
+                        'notebook_name': item.name,
+                        'page_id': page['id']
+                    })
+                    notebook_item.addChild(page_item)
+
+    def on_tree_item_selected(self, current, _previous):
+        """Handle tree item selection (notebook or page).
+
+        When a notebook is selected, loads the default page (page_0).
+        When a page is selected, loads that specific page.
         """
-        if current:
-            self.current_notebook = current.text()
-            self.load_pages()
-
-            # Auto-load the default page (pages[0])
-            self.current_page = "page_0"
-            self.load_page_content("page_0")
-
-    def load_pages(self):
-        """Load pages for current notebook into the page list UI.
-
-        Skips pages[0] (the default page) since it's accessed by selecting
-        the notebook itself, not from the page list. Only user-created pages
-        (pages[1], pages[2], etc.) appear in the list.
-        """
-        self.page_list.clear()
-
-        if not self.current_notebook:
+        if not current:
             return
 
-        notebook_path = self.notebooks_dir / self.current_notebook
-        with open(notebook_path / "notebook.json", 'r') as f:
-            metadata = json.load(f)
+        # Save previous page if exists
+        if self.current_page:
+            self.save_page()
 
-        # Skip pages[0] (default page) - it's accessed by selecting the notebook
-        for page in metadata['pages'][1:]:
-            self.page_list.addItem(page['name'])
+        # Get item data
+        item_data = current.data(0, Qt.ItemDataRole.UserRole)
+        if not item_data:
+            return
 
-    def on_page_selected(self, current, previous):
-        """Handle page selection"""
-        if current:
-            # Save previous page if exists
-            if self.current_page:
-                self.save_page()
+        item_type = item_data['type']
+        notebook_name = item_data['notebook_name']
 
-            # Load new page
-            page_name = current.text()
-            notebook_path = self.notebooks_dir / self.current_notebook
+        if item_type == 'notebook':
+            # Notebook selected - load its default page (page_0)
+            self.current_notebook = notebook_name
+            self.current_page = "page_0"
+            self.load_page_content("page_0")
+        elif item_type == 'page':
+            # Page selected - load that page
+            self.current_notebook = notebook_name
+            page_id = item_data['page_id']
+            self.current_page = page_id
+            self.load_page_content(page_id)
 
-            with open(notebook_path / "notebook.json", 'r') as f:
-                metadata = json.load(f)
-
-            # Find page ID
-            page_id = None
-            for page in metadata['pages']:
-                if page['name'] == page_name:
-                    page_id = page['id']
-                    break
-
-            if page_id:
-                self.current_page = page_id
-                self.load_page_content(page_id)
+        # Save state after selection changes
+        self.save_tree_state()
 
     def load_page_content(self, page_id):
         """Load page content into canvas"""
@@ -510,10 +509,60 @@ class NCONotesWindow(QMainWindow):
 
         self.statusBar().showMessage(f"Saved page", 2000)
 
+    def save_tree_state(self):
+        """Save tree expansion state and current selection"""
+        expanded_notebooks = []
+        for i in range(self.notebook_tree.topLevelItemCount()):
+            item = self.notebook_tree.topLevelItem(i)
+            if item.isExpanded():
+                expanded_notebooks.append(item.text(0))
+
+        self.settings.setValue("expanded_notebooks", expanded_notebooks)
+        self.settings.setValue("current_notebook", self.current_notebook)
+        self.settings.setValue("current_page", self.current_page)
+
+    def restore_tree_state(self):
+        """Restore tree expansion state and selection from previous session"""
+        expanded_notebooks = self.settings.value("expanded_notebooks", [])
+        saved_notebook = self.settings.value("current_notebook", None)
+        saved_page = self.settings.value("current_page", None)
+
+        # Restore expansion state
+        for i in range(self.notebook_tree.topLevelItemCount()):
+            item = self.notebook_tree.topLevelItem(i)
+            if item.text(0) in expanded_notebooks:
+                item.setExpanded(True)
+
+        # Restore selection if previous session had one
+        if saved_notebook and saved_page:
+            self.restore_selection(saved_notebook, saved_page)
+
+    def restore_selection(self, notebook_name, page_id):
+        """Restore the selected item in the tree"""
+        # Find and select the appropriate tree item
+        for i in range(self.notebook_tree.topLevelItemCount()):
+            notebook_item = self.notebook_tree.topLevelItem(i)
+            item_data = notebook_item.data(0, Qt.ItemDataRole.UserRole)
+
+            if item_data and item_data['notebook_name'] == notebook_name:
+                if page_id == "page_0":
+                    # Select the notebook itself
+                    self.notebook_tree.setCurrentItem(notebook_item)
+                    return
+                else:
+                    # Find the page child
+                    for j in range(notebook_item.childCount()):
+                        page_item = notebook_item.child(j)
+                        page_data = page_item.data(0, Qt.ItemDataRole.UserRole)
+                        if page_data and page_data['page_id'] == page_id:
+                            self.notebook_tree.setCurrentItem(page_item)
+                            return
+
     def closeEvent(self, event):
         """Save before closing"""
         if self.current_page:
             self.save_page()
+        self.save_tree_state()
         event.accept()
 
 
