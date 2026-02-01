@@ -388,12 +388,21 @@ class SettingsWindow(QDialog):
                 }}
             """)
 
-            # Force update all existing widgets to pick up the new style
-            for widget in app.allWidgets():
-                widget.update()
-                # For QTextEdit widgets, force a font refresh
-                if isinstance(widget, QTextEdit):
-                    widget.setStyleSheet(widget.styleSheet())
+            # Update existing text editors in the canvas
+            # Get the main window (parent of this dialog)
+            if self.parent():
+                main_window = self.parent()
+                if hasattr(main_window, 'canvas'):
+                    for item in main_window.canvas.scene.items():
+                        if isinstance(item, ResizableTextEdit):
+                            # Update the text edit stylesheet with new font size
+                            item.text_area.text_edit.setStyleSheet(f"""
+                                QTextEdit {{
+                                    background-color: white;
+                                    border: 1px solid rgb(200, 200, 200);
+                                    font-size: {int(11 * scale_value)}pt;
+                                }}
+                            """)
 
 
 class NCONotesWindow(QMainWindow):
