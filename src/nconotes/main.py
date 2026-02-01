@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidget, QPushButton, QTreeWidget, QTreeWidgetItem, QSplitter,
     QGraphicsPixmapItem, QGraphicsRectItem, QMessageBox, QToolBar,
     QGraphicsItem, QInputDialog, QDialog, QListWidget, QStackedWidget,
-    QLabel, QComboBox, QFormLayout, QSizePolicy
+    QLabel, QComboBox, QFormLayout, QSizePolicy, QTextEdit
 )
 from PySide6.QtCore import Qt, QRectF, QPointF, QSettings
 from PySide6.QtGui import (
