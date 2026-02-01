@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidget, QPushButton, QTreeWidget, QTreeWidgetItem, QSplitter,
     QGraphicsPixmapItem, QGraphicsRectItem, QMessageBox, QToolBar,
     QGraphicsItem, QInputDialog, QDialog, QListWidget, QStackedWidget,
-    QLabel, QComboBox, QFormLayout
+    QLabel, QComboBox, QFormLayout, QSizePolicy
 )
 from PySide6.QtCore import Qt, QRectF, QPointF, QSettings
 from PySide6.QtGui import (
@@ -446,7 +446,7 @@ class NCONotesWindow(QMainWindow):
 
         # Add spacer to push settings button to the right
         spacer = QWidget()
-        spacer.setSizePolicy(QWidget.SizePolicy.Expanding, QWidget.SizePolicy.Preferred)
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         toolbar.addWidget(spacer)
 
         # Settings button (anchored to right)
