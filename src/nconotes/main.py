@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QRectF, QPointF, QSettings
 from PySide6.QtGui import (
     QPixmap, QImage, QPainter, QColor, QPen, QBrush,
-    QTransform, QAction, QKeySequence, QUndoStack, QUndoCommand, QIcon
+    QTransform, QAction, QKeySequence, QUndoStack, QUndoCommand, QIcon, QFont
 )
 
 from nconotes.models import ImageData
@@ -395,14 +395,10 @@ class SettingsWindow(QDialog):
                 if hasattr(main_window, 'canvas'):
                     for item in main_window.canvas.scene.items():
                         if isinstance(item, ResizableTextEdit):
-                            # Update the text edit stylesheet with new font size
-                            item.text_area.text_edit.setStyleSheet(f"""
-                                QTextEdit {{
-                                    background-color: white;
-                                    border: 1px solid rgb(200, 200, 200);
-                                    font-size: {int(11 * scale_value)}pt;
-                                }}
-                            """)
+                            # Directly set the font size
+                            font = item.text_area.text_edit.font()
+                            font.setPointSize(int(11 * scale_value))
+                            item.text_area.text_edit.setFont(font)
 
 
 class NCONotesWindow(QMainWindow):

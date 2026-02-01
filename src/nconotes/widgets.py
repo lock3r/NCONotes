@@ -12,7 +12,7 @@ Main access points:
 from PySide6.QtWidgets import (
     QWidget, QTextEdit, QVBoxLayout, QGraphicsProxyWidget, QGraphicsItem
 )
-from PySide6.QtCore import Qt, QRectF, QPointF, QSizeF
+from PySide6.QtCore import Qt, QRectF, QPointF, QSizeF, QSettings
 from PySide6.QtGui import QColor
 
 from nconotes.models import TextBoxData
@@ -63,6 +63,13 @@ class TextAreaWidget(QWidget):
                 border: 1px solid rgb(200, 200, 200);
             }
         """)
+
+        # Apply current UI scale to font size
+        settings = QSettings("NCONotes", "NCONotes")
+        scale = settings.value("ui_scale", 1.0, type=float)
+        font = self.text_edit.font()
+        font.setPointSize(int(11 * scale))
+        self.text_edit.setFont(font)
 
         layout.addWidget(self.text_edit)
 
