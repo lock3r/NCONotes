@@ -12,7 +12,7 @@ Main access points:
 from PySide6.QtWidgets import (
     QWidget, QTextEdit, QVBoxLayout, QGraphicsProxyWidget, QGraphicsItem
 )
-from PySide6.QtCore import Qt, QRectF, QPointF, QSizeF, QSettings
+from PySide6.QtCore import Qt, QRectF, QPointF, QSizeF, QSettings, Signal
 from PySide6.QtGui import QColor, QTextCursor
 
 from nconotes.models import TextBoxData
@@ -117,6 +117,10 @@ class TextAreaWidget(QWidget):
 class ResizableTextEdit(QGraphicsProxyWidget):
     """A resizable text editor with title bar that can be placed on the canvas"""
 
+    # Signals for document operations
+    move_finished = Signal(QPointF, QPointF)    # (old_pos, new_pos)
+    resize_finished = Signal(tuple, tuple)       # (old_size, new_size)
+
     def __init__(self, pos, size=None):
         super().__init__()
 
@@ -156,6 +160,10 @@ class ResizableTextEdit(QGraphicsProxyWidget):
         self.is_title_bar_drag = False
         self.title_bar_drag_start_pos = None
         self.title_bar_drag_start_widget_pos = None
+
+        # Track state for undo/redo commands
+        self.drag_start_position = None  # Position when drag started
+        self.resize_start_dimensions = None  # (width, height) when resize started
 
         # Enable hover events
         self.setAcceptHoverEvents(True)
@@ -208,6 +216,8 @@ class ResizableTextEdit(QGraphicsProxyWidget):
                 self.is_title_bar_drag = True
                 self.title_bar_drag_start_pos = event.scenePos()
                 self.title_bar_drag_start_widget_pos = self.pos()
+                # Track starting position for undo/redo
+                self.drag_start_position = QPointF(self.pos())
                 event.accept()
                 return
 
@@ -224,6 +234,11 @@ class ResizableTextEdit(QGraphicsProxyWidget):
                 self.is_resizing = True
                 self.resize_start_pos = event.scenePos()
                 self.resize_start_size = QSizeF(
+                    self.text_area.width(),
+                    self.text_area.height()
+                )
+                # Track starting dimensions for undo/redo
+                self.resize_start_dimensions = (
                     self.text_area.width(),
                     self.text_area.height()
                 )
@@ -265,11 +280,23 @@ class ResizableTextEdit(QGraphicsProxyWidget):
     def mouseReleaseEvent(self, event):
         if self.is_title_bar_drag:
             self.is_title_bar_drag = False
+            # Emit signal if position changed
+            if self.drag_start_position is not None:
+                new_pos = self.pos()
+                if new_pos != self.drag_start_position:
+                    self.move_finished.emit(self.drag_start_position, new_pos)
+                self.drag_start_position = None
             event.accept()
             return
 
         if self.is_resizing:
             self.is_resizing = False
+            # Emit signal if size changed
+            if self.resize_start_dimensions is not None:
+                new_size = (self.text_area.width(), self.text_area.height())
+                if new_size != self.resize_start_dimensions:
+                    self.resize_finished.emit(self.resize_start_dimensions, new_size)
+                self.resize_start_dimensions = None
             event.accept()
             return
 
@@ -297,3 +324,19 @@ class ResizableTextEdit(QGraphicsProxyWidget):
         # Update font size to match current UI scale
         widget.text_area.update_font_size()
         return widget
+
+    def update_from_data(self, data):
+        """
+        Update widget state from data object.
+
+        Used when document state changes (e.g., during undo/redo).
+        Does not update content since that's managed by QTextEdit's own undo stack.
+        """
+        # Update position
+        self.setPos(QPointF(data.x, data.y))
+
+        # Update size
+        self.prepareGeometryChange()
+        self.text_area.resize_widget(data.width, data.height)
+        total_height = data.height + self.title_bar.height()
+        self.resize(int(data.width), int(total_height))

@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QGraphicsItem, QInputDialog, QDialog, QListWidget, QStackedWidget,
     QLabel, QComboBox, QFormLayout, QSizePolicy, QTextEdit
 )
-from PySide6.QtCore import Qt, QRectF, QPointF, QSettings
+from PySide6.QtCore import Qt, QRectF, QPointF, QSettings, Signal, QObject
 from PySide6.QtGui import (
     QPixmap, QImage, QPainter, QColor, QPen, QBrush,
     QTransform, QAction, QKeySequence, QUndoStack, QUndoCommand, QIcon, QFont
@@ -33,11 +33,16 @@ from nconotes.models import ImageData
 from nconotes.widgets import ResizableTextEdit
 
 
-class ResizableImage(QGraphicsPixmapItem):
+class ResizableImage(QObject, QGraphicsPixmapItem):
     """A resizable, movable image on the canvas"""
 
+    # Signals for document operations
+    move_finished = Signal(QPointF, QPointF)    # (old_pos, new_pos)
+    resize_finished = Signal(tuple, tuple)       # (old_size, new_size)
+
     def __init__(self, pixmap, pos, image_id=None):
-        super().__init__(pixmap)
+        QObject.__init__(self)
+        QGraphicsPixmapItem.__init__(self, pixmap)
 
         # Generate new UUID if not provided (new image), use existing if provided (loading)
         self.image_id = image_id if image_id else str(uuid.uuid4())
@@ -52,6 +57,11 @@ class ResizableImage(QGraphicsPixmapItem):
         self.resize_start_pos = None
         self.resize_start_scale = 1.0
         self.current_scale = 1.0
+
+        # Track state for undo/redo commands
+        self.drag_start_position = None  # Position when drag started
+        self.resize_start_dimensions = None  # (width, height) when resize started
+        self.is_moving = False
 
     def paint(self, painter, option, widget):
         super().paint(painter, option, widget)
@@ -91,8 +101,15 @@ class ResizableImage(QGraphicsPixmapItem):
                 self.is_resizing = True
                 self.resize_start_pos = event.scenePos()
                 self.resize_start_scale = self.current_scale
+                # Track starting dimensions for undo/redo
+                pixmap = self.original_pixmap
+                self.resize_start_dimensions = (pixmap.width(), pixmap.height())
                 event.accept()
                 return
+            else:
+                # Track starting position for move operation
+                self.is_moving = True
+                self.drag_start_position = QPointF(self.pos())
 
         super().mousePressEvent(event)
 
@@ -113,8 +130,24 @@ class ResizableImage(QGraphicsPixmapItem):
     def mouseReleaseEvent(self, event):
         if self.is_resizing:
             self.is_resizing = False
+            # Emit signal if size changed
+            if self.resize_start_dimensions is not None:
+                pixmap = self.original_pixmap
+                new_size = (pixmap.width(), pixmap.height())
+                if new_size != self.resize_start_dimensions:
+                    self.resize_finished.emit(self.resize_start_dimensions, new_size)
+                self.resize_start_dimensions = None
             event.accept()
             return
+
+        if self.is_moving:
+            self.is_moving = False
+            # Emit signal if position changed
+            if self.drag_start_position is not None:
+                new_pos = self.pos()
+                if new_pos != self.drag_start_position:
+                    self.move_finished.emit(self.drag_start_position, new_pos)
+                self.drag_start_position = None
 
         super().mouseReleaseEvent(event)
 
@@ -153,6 +186,31 @@ class ResizableImage(QGraphicsPixmapItem):
         widget.current_scale = image_data.scale
         return widget
 
+    @staticmethod
+    def from_image_data(data, images_dir):
+        """Create ResizableImage from ImageData object"""
+        image_path = images_dir / f"{data.image_id}.png"
+
+        if not image_path.exists():
+            raise FileNotFoundError(f"Image file not found: {image_path}")
+
+        pixmap = QPixmap(str(image_path))
+        pos = QPointF(data.x, data.y)
+        widget = ResizableImage(pixmap, pos, image_id=data.image_id)
+        widget.setScale(data.scale)
+        widget.current_scale = data.scale
+        return widget
+
+    def update_from_data(self, data):
+        """
+        Update widget state from ImageData object.
+
+        Used when document state changes (e.g., during undo/redo).
+        """
+        self.setPos(QPointF(data.x, data.y))
+        self.setScale(data.scale)
+        self.current_scale = data.scale
+
 
 class InfiniteCanvas(QGraphicsView):
     """Infinite canvas that supports click-to-create text editors"""
@@ -186,6 +244,11 @@ class InfiniteCanvas(QGraphicsView):
         # Track panning state
         self.is_panning = False
         self.pan_start_pos = None
+
+        # Document integration
+        self.document = None
+        self.item_widgets = {}  # item_id → widget mapping
+        self.images_dir = None  # Path to images directory for current notebook
 
     def mousePressEvent(self, event):
         """Handle mouse press for panning (Ctrl+drag or middle-mouse)"""
@@ -242,13 +305,9 @@ class InfiniteCanvas(QGraphicsView):
 
             # Only create a new editor if clicking on empty canvas
             if item is None:
-                # Create text editor at click position
-                text_editor = ResizableTextEdit(scene_pos)
-                self.scene.addItem(text_editor)
-
-                # Focus the new editor
-                text_editor.text_area.text_edit.setFocus()
-
+                # Notify parent window to handle creation (via command pattern)
+                if hasattr(self.parent(), 'on_canvas_double_click'):
+                    self.parent().on_canvas_double_click(scene_pos)
                 event.accept()
             else:
                 # Let the item handle the double-click (e.g., text selection)
@@ -270,8 +329,9 @@ class InfiniteCanvas(QGraphicsView):
         if event.mimeData().hasImage():
             image = QImage(event.mimeData().imageData())
             pixmap = QPixmap.fromImage(image)
-            image_item = ResizableImage(pixmap, scene_pos)
-            self.scene.addItem(image_item)
+            # Notify parent window to handle creation (via command pattern)
+            if hasattr(self.parent(), 'on_image_dropped'):
+                self.parent().on_image_dropped(pixmap, scene_pos)
             event.acceptProposedAction()
 
         # Handle file drops
@@ -280,8 +340,9 @@ class InfiniteCanvas(QGraphicsView):
                 file_path = url.toLocalFile()
                 if file_path.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')):
                     pixmap = QPixmap(file_path)
-                    image_item = ResizableImage(pixmap, scene_pos)
-                    self.scene.addItem(image_item)
+                    # Notify parent window to handle creation (via command pattern)
+                    if hasattr(self.parent(), 'on_image_dropped'):
+                        self.parent().on_image_dropped(pixmap, scene_pos)
             event.acceptProposedAction()
 
     def wheelEvent(self, event):
@@ -292,6 +353,88 @@ class InfiniteCanvas(QGraphicsView):
             event.accept()
         else:
             super().wheelEvent(event)
+
+    def set_document(self, document, images_dir):
+        """
+        Connect canvas to a PageDocument.
+
+        Args:
+            document: PageDocument instance
+            images_dir: Path to images directory for loading image files
+
+        Connects to document signals and populates the scene with existing items.
+        """
+        # Disconnect from old document if any
+        if self.document:
+            self.document.item_added.disconnect(self._on_item_added)
+            self.document.item_removed.disconnect(self._on_item_removed)
+            self.document.item_modified.disconnect(self._on_item_modified)
+
+        self.document = document
+        self.images_dir = images_dir
+
+        # Clear scene and widget mapping
+        self.scene.clear()
+        self.item_widgets.clear()
+
+        # Connect to document signals
+        self.document.item_added.connect(self._on_item_added)
+        self.document.item_removed.connect(self._on_item_removed)
+        self.document.item_modified.connect(self._on_item_modified)
+
+        # Populate scene with existing items
+        for item_id, data in self.document.get_all_items().items():
+            self._on_item_added(item_id, data)
+
+    def _on_item_added(self, item_id, data):
+        """Create and add a widget when an item is added to the document"""
+        from nconotes.models import TextBoxData, ImageData
+
+        if isinstance(data, TextBoxData):
+            # Create text box widget
+            pos = QPointF(data.x, data.y)
+            size = (data.width, data.height)
+            widget = ResizableTextEdit(pos, size)
+            widget.text_area.set_content(data.content)
+        elif isinstance(data, ImageData):
+            # Create image widget
+            try:
+                widget = ResizableImage.from_image_data(data, self.images_dir)
+            except FileNotFoundError as e:
+                print(f"Warning: {e}")
+                return
+        else:
+            return
+
+        # Store item_id in widget for later reference
+        widget.item_id = item_id
+
+        # Connect widget signals to parent window controller methods
+        if hasattr(self.parent(), 'on_item_moved'):
+            widget.move_finished.connect(
+                lambda old_pos, new_pos: self.parent().on_item_moved(item_id, old_pos, new_pos)
+            )
+        if hasattr(self.parent(), 'on_item_resized'):
+            widget.resize_finished.connect(
+                lambda old_size, new_size: self.parent().on_item_resized(item_id, old_size, new_size)
+            )
+
+        # Add to scene and mapping
+        self.scene.addItem(widget)
+        self.item_widgets[item_id] = widget
+
+    def _on_item_removed(self, item_id):
+        """Remove widget when an item is removed from the document"""
+        if item_id in self.item_widgets:
+            widget = self.item_widgets[item_id]
+            self.scene.removeItem(widget)
+            del self.item_widgets[item_id]
+
+    def _on_item_modified(self, item_id, data):
+        """Update widget when an item is modified in the document"""
+        if item_id in self.item_widgets:
+            widget = self.item_widgets[item_id]
+            widget.update_from_data(data)
 
 
 class SettingsWindow(QDialog):
@@ -409,6 +552,9 @@ class NCONotesWindow(QMainWindow):
         self.notebooks_dir = Path.home() / "MyNotebooks"
         self.notebooks_dir.mkdir(exist_ok=True)
 
+        # Document layer
+        self.current_document = None
+
         # Undo stack
         self.undo_stack = QUndoStack(self)
 
@@ -444,13 +590,13 @@ class NCONotesWindow(QMainWindow):
 
         toolbar.addSeparator()
 
-        # Undo/Redo (basic - you'd extend this)
+        # Undo/Redo (shortcuts handled by event filter for context-aware routing)
         undo_action = QAction("Undo", self)
-        undo_action.setShortcut(QKeySequence.StandardKey.Undo)
+        undo_action.triggered.connect(self.undo_stack.undo)
         toolbar.addAction(undo_action)
 
         redo_action = QAction("Redo", self)
-        redo_action.setShortcut(QKeySequence.StandardKey.Redo)
+        redo_action.triggered.connect(self.undo_stack.redo)
         toolbar.addAction(redo_action)
 
         # Add spacer to push settings button to the right
@@ -494,6 +640,9 @@ class NCONotesWindow(QMainWindow):
         splitter.setSizes([200, 1000])
 
         main_layout.addWidget(splitter)
+
+        # Install event filter for context-aware undo/redo routing
+        self.installEventFilter(self)
 
     def open_settings(self):
         """Open the settings dialog"""
@@ -628,58 +777,192 @@ class NCONotesWindow(QMainWindow):
         self.save_tree_state()
 
     def load_page_content(self, page_id):
-        """Load page content into canvas"""
-        # Clear canvas
-        self.canvas.scene.clear()
+        """Load page content into canvas using document pattern"""
+        from nconotes.document import PageDocument
+        from nconotes.models import TextBoxData, ImageData
+
+        # Create new document for this page
+        self.current_document = PageDocument()
 
         notebook_path = self.notebooks_dir / self.current_notebook
         page_path = notebook_path / "pages" / f"{page_id}.json"
-
-        if not page_path.exists():
-            return
-
-        with open(page_path, 'r') as f:
-            page_data = json.load(f)
-
         images_dir = notebook_path / "images"
 
-        # Restore items
-        for item_data in page_data.get('items', []):
-            if item_data['type'] == 'text':
-                item = ResizableTextEdit.from_dict(item_data)
-                self.canvas.scene.addItem(item)
-            elif item_data['type'] == 'image':
-                try:
-                    item = ResizableImage.from_dict(item_data, images_dir)
-                    self.canvas.scene.addItem(item)
-                except FileNotFoundError as e:
-                    print(f"Warning: {e}")
+        # Load existing items if page exists
+        if page_path.exists():
+            with open(page_path, 'r') as f:
+                page_data = json.load(f)
+
+            # Populate document with items
+            for item_data in page_data.get('items', []):
+                # Generate ID if missing (backward compatibility)
+                item_id = item_data.get('id')
+                if not item_id:
+                    item_id = self.current_document.generate_id()
+
+                # Create data object based on type
+                if item_data['type'] == 'text':
+                    data = TextBoxData.from_dict(item_data)
+                elif item_data['type'] == 'image':
+                    data = ImageData.from_dict(item_data)
+                else:
+                    continue
+
+                # Add to document (not through command - this is loading)
+                self.current_document.add_item(item_id, data)
+
+        # Connect canvas to document
+        self.canvas.set_document(self.current_document, images_dir)
+
+        # Clear undo stack (new page means fresh history)
+        self.undo_stack.clear()
 
     def save_page(self):
-        """Save current page"""
-        if not self.current_page or not self.current_notebook:
+        """Save current page using document pattern"""
+        if not self.current_page or not self.current_notebook or not self.current_document:
             return
+
+        from nconotes.models import TextBoxData, ImageData
 
         notebook_path = self.notebooks_dir / self.current_notebook
         images_dir = notebook_path / "images"
 
-        # Collect all items
+        # Sync text content from widgets to document
+        # (Text content is managed by QTextEdit, not the document)
+        for item_id, widget in self.canvas.item_widgets.items():
+            if isinstance(widget, ResizableTextEdit):
+                data = self.current_document.get_item(item_id)
+                if data and isinstance(data, TextBoxData):
+                    # Update content but keep position/size from document
+                    updated_data = TextBoxData(
+                        content=widget.text_area.get_content(),
+                        x=data.x,
+                        y=data.y,
+                        width=data.width,
+                        height=data.height
+                    )
+                    self.current_document.modify_item(item_id, updated_data)
+
+        # Collect all items from document
         items = []
-        for item in self.canvas.scene.items():
-            if isinstance(item, ResizableTextEdit):
-                items.append(item.to_dict())
-            elif isinstance(item, ResizableImage):
-                item.save_to_file(images_dir)
-                items.append(item.to_dict())
+        for item_id, data in self.current_document.get_all_items().items():
+            # Serialize data to dict and add ID
+            item_dict = data.to_dict()
+            item_dict['id'] = item_id
+            items.append(item_dict)
+
+            # Save image files to disk
+            if isinstance(data, ImageData):
+                # Find the widget to save its pixmap
+                if item_id in self.canvas.item_widgets:
+                    widget = self.canvas.item_widgets[item_id]
+                    if isinstance(widget, ResizableImage):
+                        widget.save_to_file(images_dir)
 
         # Save to file
         page_path = notebook_path / "pages" / f"{self.current_page}.json"
-
         page_data = {'items': items}
         with open(page_path, 'w') as f:
             json.dump(page_data, f, indent=2)
 
         self.statusBar().showMessage(f"Saved page", 2000)
+
+    def on_canvas_double_click(self, pos):
+        """
+        Handle double-click on canvas to create text box.
+
+        Creates a command and pushes it to the undo stack.
+        """
+        if not self.current_document:
+            return
+
+        from nconotes.models import TextBoxData
+        from nconotes.commands import CreateItemCommand
+
+        # Generate ID and create data
+        item_id = self.current_document.generate_id()
+        data = TextBoxData(
+            content='',
+            x=pos.x(),
+            y=pos.y(),
+            width=300,
+            height=200
+        )
+
+        # Create and execute command
+        command = CreateItemCommand(self.current_document, item_id, data)
+        self.undo_stack.push(command)
+
+        # Focus the new text editor
+        if item_id in self.canvas.item_widgets:
+            widget = self.canvas.item_widgets[item_id]
+            if isinstance(widget, ResizableTextEdit):
+                widget.text_area.text_edit.setFocus()
+
+    def on_image_dropped(self, pixmap, pos):
+        """
+        Handle image drop on canvas.
+
+        Saves image to disk and creates a command.
+        """
+        if not self.current_document or not self.current_notebook:
+            return
+
+        from nconotes.models import ImageData
+        from nconotes.commands import CreateItemCommand
+
+        # Generate IDs
+        item_id = self.current_document.generate_id()
+        image_id = str(uuid.uuid4())
+
+        # Save image to disk
+        notebook_path = self.notebooks_dir / self.current_notebook
+        images_dir = notebook_path / "images"
+        images_dir.mkdir(exist_ok=True)
+        image_path = images_dir / f"{image_id}.png"
+        pixmap.save(str(image_path), "PNG")
+
+        # Create data
+        data = ImageData(
+            image_id=image_id,
+            x=pos.x(),
+            y=pos.y(),
+            scale=1.0,
+            width=pixmap.width(),
+            height=pixmap.height()
+        )
+
+        # Create and execute command
+        command = CreateItemCommand(self.current_document, item_id, data)
+        self.undo_stack.push(command)
+
+    def on_item_moved(self, item_id, old_pos, new_pos):
+        """
+        Handle item move operation.
+
+        Creates a command and pushes it to the undo stack.
+        """
+        if not self.current_document:
+            return
+
+        from nconotes.commands import MoveItemCommand
+
+        command = MoveItemCommand(self.current_document, item_id, old_pos, new_pos)
+        self.undo_stack.push(command)
+
+    def on_item_resized(self, item_id, old_size, new_size):
+        """
+        Handle item resize operation.
+
+        Creates a command and pushes it to the undo stack.
+        """
+        if not self.current_document:
+            return
+
+        from nconotes.commands import ResizeItemCommand
+
+        command = ResizeItemCommand(self.current_document, item_id, old_size, new_size)
+        self.undo_stack.push(command)
 
     def save_tree_state(self):
         """Save tree expansion state and current selection"""
@@ -736,6 +1019,41 @@ class NCONotesWindow(QMainWindow):
             self.save_page()
         self.save_tree_state()
         event.accept()
+
+    def eventFilter(self, obj, event):
+        """
+        Event filter for context-aware undo/redo routing.
+
+        Routes Ctrl+Z/Ctrl+Shift+Z based on focus:
+        - If QTextEdit has focus: let it handle typing undo
+        - Otherwise: use document undo stack
+        """
+        from PySide6.QtCore import QEvent
+
+        if event.type() == QEvent.Type.KeyPress:
+            # Check for Undo shortcut
+            if event.matches(QKeySequence.StandardKey.Undo):
+                focused = QApplication.focusWidget()
+                if isinstance(focused, QTextEdit):
+                    # Let QTextEdit handle its own undo
+                    return False
+                else:
+                    # Use document undo stack
+                    self.undo_stack.undo()
+                    return True
+
+            # Check for Redo shortcut
+            if event.matches(QKeySequence.StandardKey.Redo):
+                focused = QApplication.focusWidget()
+                if isinstance(focused, QTextEdit):
+                    # Let QTextEdit handle its own redo
+                    return False
+                else:
+                    # Use document undo stack
+                    self.undo_stack.redo()
+                    return True
+
+        return super().eventFilter(obj, event)
 
 
 def main():
