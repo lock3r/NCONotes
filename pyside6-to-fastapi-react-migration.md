@@ -114,7 +114,7 @@ Uses `multiprocessing` with the `spawn` start method for identical behavior acro
 
 Two distinct canvas item types, matching the current implementation:
 
-- `TextItem`: id, x, y, width, height, z_index, content (HTML string from TipTap), deleted_at (optional ISO timestamp)
+- `TextItem`: id, x, y, width, height, z_index, content (HTML string), deleted_at (optional ISO timestamp)
 - `ImageItem`: id, x, y, width, height, z_index, scale, image_id, deleted_at (optional ISO timestamp)
 - `ViewState`: pan_x, pan_y, scale (persisted per page so the user resumes where they left off)
 - `PageMeta`: id, title
@@ -164,15 +164,17 @@ Two flows, both triggered by paste (Ctrl+V) or drag-and-drop:
 
 Both flows use the same image upload endpoint. Images are always stored as `{uuid}.png` under `images/`.
 
-### Image orphan cleanup
+### Image cleanup
 
-When a `TextItem` is deleted, its TipTap HTML may contain `<img src="...">` references whose
-backing files are never explicitly removed. Similarly, if a `TextItem`'s content is edited and
-an image is removed from the HTML, the file remains on disk.
+Images are deleted eagerly at purge time, not via a background scan:
 
-Cleanup strategy: on startup (after trash purge), scan all non-deleted page JSONs in a notebook,
-collect every `image_id` referenced (both from `ImageItem` fields and from `src` URLs in TipTap HTML),
-and delete any `images/{uuid}.png` file not in that set. This runs per-notebook, lazily.
+- **Permanent purge of an `ImageItem`**: delete `images/{image_id}.png`
+- **Permanent purge of a `TextItem`**: parse the HTML, extract `<img src>` URLs, delete the referenced image files
+- **Permanent purge of a page**: delete all image files referenced by every item on that page
+- **Permanent purge of a notebook**: delete the entire notebook directory — images go with it
+
+The only unhandled case is a user editing a TipTap note and removing an embedded image without
+deleting the note. That leaves a small orphaned file on disk. Accepted as a known minor leak — not worth the complexity of tracking it.
 
 ### Storage layer (`backend/storage/notebooks.py`)
 
@@ -190,7 +192,6 @@ list_trash() → list[TrashItem]                      # TrashItem: id, name, typ
 restore_trash_item(item_id: str, item_type: str) → None
 purge_trash_item(item_id: str, item_type: str) → None  # permanent delete
 purge_expired_trash() → None                        # called on startup; removes items > 60 days old
-purge_orphaned_images() → None                      # called on startup after trash purge
 ```
 
 ### REST API
@@ -380,9 +381,10 @@ correct from the start to avoid a painful retrofit later.**
 - No explicit save — all changes auto-save (debounced)
 - Errors are always shown to the user via ErrorBanner; nothing fails silently
 - Deletion is always soft: notebooks/pages move to `.trash/`; notes get `deleted_at` in the page JSON
-- Trash items older than 60 days are purged on startup; orphaned images are cleaned up in the same pass
+- Trash items older than 60 days are purged on startup; image files are deleted eagerly at purge time
 - Health poll in main.py raises RuntimeError after 30 seconds if backend doesn't respond
 - Notebooks and pages are identified internally by UUID; user-visible names are metadata
+- All timestamps are stored as UTC ISO 8601 strings (`datetime.now(timezone.utc).isoformat()`); the frontend converts to local time for display via `new Date(str)` and `Intl.DateTimeFormat`
 - Z-ordering: items are rendered by `z_index` ascending; any click/create sets `z_index` to current max+1
 - Undo/redo scope is per-page; stacks are cleared on page switch; TipTap owns its own undo when active
 - Images enter the canvas via paste (Ctrl+V) or drag-and-drop from the filesystem
