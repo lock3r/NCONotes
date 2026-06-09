@@ -203,6 +203,14 @@ def delete_notebook(notebook_id: str) -> None:
 # Pages
 # ---------------------------------------------------------------------------
 
+def list_pages(notebook_id: str) -> list[PageMeta]:
+    nb_json = _notebook_json(notebook_id)
+    if not nb_json.exists():
+        raise NotFoundError(f"Notebook not found: {notebook_id}")
+    nb = Notebook.model_validate(_read_json(nb_json))
+    return nb.pages
+
+
 def load_page(notebook_id: str, page_id: str) -> Page:
     data = _read_json(_page_json(notebook_id, page_id))
     return Page.model_validate(data)
