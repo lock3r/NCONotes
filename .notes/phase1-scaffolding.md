@@ -78,9 +78,8 @@ when Editor.tsx is implemented.
 
 ### 3. `.gitignore` — frontend/dist and node_modules
 
-The existing `.gitignore` was not modified. It should already exclude `node_modules/` and `dist/`
-but this was not audited during phase 1. Should be confirmed before the first commit that includes
-the frontend scaffold.
+The existing `.gitignore` was missing entries for `node_modules/` and `frontend/dist/`. Both were
+added before the first commit to prevent the entire Node dependency tree from being staged.
 
 ---
 
