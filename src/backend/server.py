@@ -5,6 +5,7 @@
 # during development. API routes are protected by X-NCONotes-Token; /health and
 # static file requests pass through without a token.
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
@@ -12,6 +13,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
+
+from backend.api import notebooks, pages, trash
+from backend.storage.notebooks import purge_expired_trash
 
 # Packaged path takes precedence; falls back to the dev build output.
 _PACKAGED_STATIC = Path(__file__).parent / "static"
@@ -35,13 +39,23 @@ class _TokenMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    purge_expired_trash()
+    yield
+
+
 def _build_app(token: str) -> FastAPI:
-    app = FastAPI()
+    app = FastAPI(lifespan=_lifespan)
     app.add_middleware(_TokenMiddleware, token=token)
 
     @app.get("/health")
     async def health():
         return {"status": "ok"}
+
+    app.include_router(notebooks.router, prefix="/api")
+    app.include_router(pages.router, prefix="/api")
+    app.include_router(trash.router, prefix="/api")
 
     static_dir = _PACKAGED_STATIC if _PACKAGED_STATIC.exists() else _DEV_STATIC
     if static_dir.exists():
