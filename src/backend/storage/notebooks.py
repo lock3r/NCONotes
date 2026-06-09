@@ -204,11 +204,18 @@ def delete_notebook(notebook_id: str) -> None:
 # ---------------------------------------------------------------------------
 
 def list_pages(notebook_id: str) -> list[PageMeta]:
+    # Returns only user-created pages (pages[1:]).
+    #
+    # pages[0] is the notebook's own canvas — the infinite whiteboard you land on
+    # when you click the notebook name in the sidebar. It is NOT a user page: it
+    # has no entry in the page list, cannot be created or deleted via the pages
+    # API, and is accessed exclusively by selecting the notebook itself.
+    # Including it here would leak that internal detail to every caller.
     nb_json = _notebook_json(notebook_id)
     if not nb_json.exists():
         raise NotFoundError(f"Notebook not found: {notebook_id}")
     nb = Notebook.model_validate(_read_json(nb_json))
-    return nb.pages
+    return nb.pages[1:]
 
 
 def load_page(notebook_id: str, page_id: str) -> Page:

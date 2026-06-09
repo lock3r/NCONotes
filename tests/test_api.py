@@ -75,13 +75,14 @@ class TestPagesAPI:
     def _make_notebook(self, client):
         return client.post("/api/notebooks", json={"name": "NB"}, headers=_HEADER).json()
 
-    def test_list_pages_includes_page0(self, client):
+    def test_list_pages_excludes_notebook_canvas(self, client):
+        # A freshly created notebook has only page_0 (the notebook canvas).
+        # The pages endpoint must not expose it — it is accessed by selecting
+        # the notebook itself, not by navigating the page list.
         nb = self._make_notebook(client)
         r = client.get(f"/api/notebooks/{nb['id']}/pages", headers=_HEADER)
         assert r.status_code == 200
-        pages = r.json()
-        assert len(pages) == 1
-        assert pages[0]["title"] == ""
+        assert r.json() == []
 
     def test_create_page(self, client):
         nb = self._make_notebook(client)

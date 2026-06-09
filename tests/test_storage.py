@@ -90,6 +90,27 @@ class TestDeleteNotebook:
 # Pages
 # ---------------------------------------------------------------------------
 
+class TestListPages:
+    def test_empty_for_new_notebook(self):
+        # A new notebook has only page_0 (the notebook canvas). list_pages must
+        # not return it — the notebook canvas is not a user page.
+        nb = storage.create_notebook("NB")
+        assert storage.list_pages(nb.id) == []
+
+    def test_returns_user_pages_only(self):
+        # page_0 must never appear even when user pages exist alongside it.
+        nb = storage.create_notebook("NB")
+        meta = storage.create_page(nb.id, "Chapter 1")
+        pages = storage.list_pages(nb.id)
+        assert len(pages) == 1
+        assert pages[0].id == meta.id
+        assert pages[0].title == "Chapter 1"
+
+    def test_raises_not_found_for_unknown_notebook(self):
+        with pytest.raises(storage.NotFoundError):
+            storage.list_pages("no-such-notebook")
+
+
 class TestCreatePage:
     def test_returns_page_meta_with_title(self):
         nb = storage.create_notebook("NB")
