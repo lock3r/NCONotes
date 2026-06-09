@@ -217,3 +217,7 @@ __marimo__/
 
 .claude*
 .private-journal
+
+# Node / frontend
+node_modules/
+frontend/dist/
