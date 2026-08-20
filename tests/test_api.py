@@ -4,7 +4,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.server import _build_app
+from backend.server import SESSION_COOKIE, _build_app
 
 _TOKEN = "test-token-abc123"
 _HEADER = {"X-NCONotes-Token": _TOKEN}
@@ -33,6 +33,45 @@ def test_api_without_token_returns_401(client):
 def test_api_with_wrong_token_returns_401(client):
     r = client.get("/api/notebooks", headers={"X-NCONotes-Token": "wrong"})
     assert r.status_code == 401
+
+
+class TestSessionCookie:
+    """The cookie exists so <img src> requests, which cannot carry headers, still authenticate."""
+
+    def test_session_requires_header_token(self, client):
+        assert client.post("/api/session").status_code == 401
+
+    def test_session_sets_hardened_cookie(self, client):
+        r = client.post("/api/session", headers=_HEADER)
+        assert r.status_code == 204
+
+        cookie = r.headers["set-cookie"]
+        assert f"{SESSION_COOKIE}={_TOKEN}" in cookie
+        assert "HttpOnly" in cookie
+        assert "SameSite=strict" in cookie
+
+    def test_cookie_authorizes_subsequent_request_without_header(self, client):
+        client.post("/api/session", headers=_HEADER)
+        # TestClient retains the cookie; no token header is sent here.
+        assert client.get("/api/notebooks").status_code == 200
+
+    def test_wrong_cookie_value_is_rejected(self, client):
+        client.cookies.set(SESSION_COOKIE, "wrong")
+        assert client.get("/api/notebooks").status_code == 401
+
+    def test_image_is_reachable_by_cookie_alone(self, client):
+        nb = client.post("/api/notebooks", json={"name": "N"}, headers=_HEADER).json()
+        upload = client.post(
+            f"/api/notebooks/{nb['id']}/images",
+            files={"file": ("i.png", b"\x89PNG-bytes", "image/png")},
+            headers=_HEADER,
+        ).json()
+
+        client.post("/api/session", headers=_HEADER)
+        r = client.get(upload["url"])
+
+        assert r.status_code == 200
+        assert r.content == b"\x89PNG-bytes"
 
 
 # ---------------------------------------------------------------------------

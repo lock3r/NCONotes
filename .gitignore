@@ -221,3 +221,5 @@ __marimo__/
 # Node / frontend
 node_modules/
 frontend/dist/
+# Dev backend handshake file (port + token), written by src/devserver.py
+frontend/.nconotes-dev.json

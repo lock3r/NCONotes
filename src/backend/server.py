@@ -4,13 +4,20 @@
 # Static files are served from backend/static/ when packaged, or frontend/dist/
 # during development. API routes are protected by X-NCONotes-Token; /health and
 # static file requests pass through without a token.
+#
+# The token may also be presented as a session cookie. Browsers cannot attach custom
+# headers to <img src> requests, so image URLs would otherwise be unreachable; the
+# frontend exchanges its header token for the cookie once via POST /api/session.
+# SameSite=strict keeps the cookie off cross-site requests, so a hostile page cannot
+# use it to reach the API.
 
+import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -22,20 +29,28 @@ _PACKAGED_STATIC = Path(__file__).parent / "static"
 _DEV_STATIC = Path(__file__).parent.parent / "frontend" / "dist"
 
 
+SESSION_COOKIE = "nconotes_session"
+
+
 class _TokenMiddleware(BaseHTTPMiddleware):
-    """Rejects /api/* requests that do not carry the correct token header."""
+    """Rejects /api/* requests that present neither the token header nor the session cookie."""
 
     def __init__(self, app, token: str) -> None:
         super().__init__(app)
         self._token = token
 
+    def _is_authorized(self, request: Request) -> bool:
+        presented = request.headers.get("X-NCONotes-Token") or request.cookies.get(SESSION_COOKIE)
+        if not presented:
+            return False
+        return secrets.compare_digest(presented, self._token)
+
     async def dispatch(self, request: Request, call_next):
-        if request.url.path.startswith("/api"):
-            if request.headers.get("X-NCONotes-Token") != self._token:
-                return JSONResponse(
-                    {"error": "unauthorized", "detail": "Missing or invalid token"},
-                    status_code=401,
-                )
+        if request.url.path.startswith("/api") and not self._is_authorized(request):
+            return JSONResponse(
+                {"error": "unauthorized", "detail": "Missing or invalid token"},
+                status_code=401,
+            )
         return await call_next(request)
 
 
@@ -52,6 +67,20 @@ def _build_app(token: str) -> FastAPI:
     @app.get("/health")
     async def health():
         return {"status": "ok"}
+
+    @app.post("/api/session", status_code=204)
+    async def create_session():
+        # Reaching this handler means the middleware already validated the header
+        # token, so the cookie can be issued unconditionally.
+        response = Response(status_code=204)
+        response.set_cookie(
+            SESSION_COOKIE,
+            token,
+            httponly=True,
+            samesite="strict",
+            path="/",
+        )
+        return response
 
     app.include_router(notebooks.router, prefix="/api")
     app.include_router(pages.router, prefix="/api")

@@ -18,13 +18,16 @@ const bannerStyle: React.CSSProperties = {
 interface Props {
   error?: string | null
   onDismiss?: () => void
+  // Supplied only for failures worth attempting again, such as a failed save.
+  onRetry?: () => void
 }
 
-export default function ErrorBanner({ error, onDismiss }: Props) {
+export default function ErrorBanner({ error, onDismiss, onRetry }: Props) {
   if (!error) return null
   return (
     <div style={bannerStyle}>
       <span style={{ flex: 1 }}>{error}</span>
+      {onRetry && <button onClick={onRetry}>Retry</button>}
       <button onClick={onDismiss}>Dismiss</button>
     </div>
   )
