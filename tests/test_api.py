@@ -248,3 +248,106 @@ class TestTrashAPI:
     def test_restore_unknown_item_returns_404(self, client):
         r = client.post("/api/trash/no-such-id/restore?type=notebook", headers=_HEADER)
         assert r.status_code == 404
+
+
+class TestTrashPanelContract:
+    """Covers what the Trash UI reads and calls: every item type, restore and purge."""
+
+    def _make_notebook(self, client):
+        return client.post("/api/notebooks", json={"name": "NB"}, headers=_HEADER).json()
+
+    def _make_page(self, client, notebook_id, title="Research"):
+        return client.post(
+            f"/api/notebooks/{notebook_id}/pages", json={"title": title}, headers=_HEADER
+        ).json()
+
+    def _save_deleted_note(self, client, notebook_id, page_id, note_id="note-1"):
+        client.put(
+            f"/api/notebooks/{notebook_id}/pages/{page_id}",
+            json={
+                "id": page_id,
+                "view_state": {"pan_x": 0.0, "pan_y": 0.0, "scale": 1.0},
+                "items": [
+                    {
+                        "type": "text",
+                        "id": note_id,
+                        "x": 10, "y": 20, "width": 200, "height": 100,
+                        "z_index": 1,
+                        "content": "<p>hello trash</p>",
+                        "deleted_at": "2026-08-20T10:00:00+00:00",
+                    }
+                ],
+            },
+            headers=_HEADER,
+        )
+
+    def test_trash_entries_carry_the_fields_the_panel_renders(self, client):
+        nb = self._make_notebook(client)
+        page = self._make_page(client, nb["id"])
+        client.delete(f"/api/notebooks/{nb['id']}/pages/{page['id']}", headers=_HEADER)
+
+        entry = client.get("/api/trash", headers=_HEADER).json()[0]
+        assert entry["type"] == "page"
+        # The panel shows name and deleted_at directly; empty values would render blank rows.
+        assert entry["name"] == "Research"
+        assert entry["deleted_at"]
+
+    def test_deleted_page_round_trips_through_trash(self, client):
+        nb = self._make_notebook(client)
+        page = self._make_page(client, nb["id"])
+        client.delete(f"/api/notebooks/{nb['id']}/pages/{page['id']}", headers=_HEADER)
+        assert client.get(f"/api/notebooks/{nb['id']}/pages", headers=_HEADER).json() == []
+
+        r = client.post(f"/api/trash/{page['id']}/restore?type=page", headers=_HEADER)
+        assert r.status_code == 204
+        pages = client.get(f"/api/notebooks/{nb['id']}/pages", headers=_HEADER).json()
+        assert [p["id"] for p in pages] == [page["id"]]
+        assert client.get("/api/trash", headers=_HEADER).json() == []
+
+    def test_purge_page_from_trash(self, client):
+        nb = self._make_notebook(client)
+        page = self._make_page(client, nb["id"])
+        client.delete(f"/api/notebooks/{nb['id']}/pages/{page['id']}", headers=_HEADER)
+
+        r = client.delete(f"/api/trash/{page['id']}?type=page", headers=_HEADER)
+        assert r.status_code == 204
+        assert client.get("/api/trash", headers=_HEADER).json() == []
+
+    def test_deleted_note_is_listed_with_its_content_as_name(self, client):
+        nb = self._make_notebook(client)
+        canvas_id = nb["pages"][0]["id"]
+        self._save_deleted_note(client, nb["id"], canvas_id)
+
+        entry = client.get("/api/trash", headers=_HEADER).json()[0]
+        assert entry["type"] == "note"
+        assert entry["id"] == "note-1"
+        assert "hello trash" in entry["name"]
+        # The panel needs these to tell the user which page the note came from.
+        assert entry["notebook_id"] == nb["id"]
+        assert entry["page_id"] == canvas_id
+
+    def test_restore_note_clears_its_deleted_at(self, client):
+        nb = self._make_notebook(client)
+        canvas_id = nb["pages"][0]["id"]
+        self._save_deleted_note(client, nb["id"], canvas_id)
+
+        r = client.post("/api/trash/note-1/restore?type=note", headers=_HEADER)
+        assert r.status_code == 204
+        page = client.get(f"/api/notebooks/{nb['id']}/pages/{canvas_id}", headers=_HEADER).json()
+        assert page["items"][0]["deleted_at"] is None
+        assert client.get("/api/trash", headers=_HEADER).json() == []
+
+    def test_purge_note_removes_it_from_the_page(self, client):
+        nb = self._make_notebook(client)
+        canvas_id = nb["pages"][0]["id"]
+        self._save_deleted_note(client, nb["id"], canvas_id)
+
+        r = client.delete("/api/trash/note-1?type=note", headers=_HEADER)
+        assert r.status_code == 204
+        page = client.get(f"/api/notebooks/{nb['id']}/pages/{canvas_id}", headers=_HEADER).json()
+        assert page["items"] == []
+
+    def test_notebook_canvas_page_has_empty_title(self, client):
+        # The sidebar substitutes "Canvas" for this, so an empty title is load-bearing.
+        nb = self._make_notebook(client)
+        assert nb["pages"][0]["title"] == ""

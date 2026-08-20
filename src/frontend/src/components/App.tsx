@@ -15,8 +15,8 @@ export default function App() {
   const saveStatus = useStore((state) => state.saveStatus)
   const retrySave = useStore((state) => state.retrySave)
 
-  // StrictMode runs effects twice in development; without this the bootstrap would
-  // create two notebooks on a first run.
+  // StrictMode runs effects twice in development; this keeps the startup sequence
+  // to a single pass.
   const startedRef = useRef(false)
 
   useEffect(() => {
@@ -35,10 +35,10 @@ export default function App() {
       }
 
       await store.loadNotebooks()
+      // Open the first notebook so the app starts on a canvas. With none, the Sidebar
+      // shows its empty state and the user names the first notebook themselves.
       const notebooks = useStore.getState().notebooks
-      if (notebooks.length === 0) {
-        await useStore.getState().createNotebook('My Notebook')
-      } else {
+      if (notebooks.length > 0) {
         await useStore.getState().selectNotebook(notebooks[0].id)
       }
     })()

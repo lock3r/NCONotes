@@ -12,7 +12,16 @@
 import { create } from 'zustand'
 import * as api from './api'
 import { ApiError } from './api'
-import type { CanvasItem, ImageItem, Notebook, PageMeta, TextItem, ViewState } from './types'
+import type {
+  CanvasItem,
+  ImageItem,
+  Notebook,
+  PageMeta,
+  TextItem,
+  TrashItem,
+  TrashItemType,
+  ViewState,
+} from './types'
 
 const UNDO_LIMIT = 50
 const ITEM_SAVE_DEBOUNCE_MS = 500
@@ -63,6 +72,7 @@ interface StoreState {
   activeItemId: string | null
   undoStack: UndoableOp[]
   redoStack: UndoableOp[]
+  trash: TrashItem[]
   activeError: string | null
   saveStatus: SaveStatus
 
@@ -93,12 +103,36 @@ interface StoreState {
   undo: () => void
   redo: () => void
 
+  loadTrash: () => Promise<void>
+  restoreFromTrash: (itemId: string, type: TrashItemType) => Promise<void>
+  purgeFromTrash: (itemId: string, type: TrashItemType) => Promise<void>
+
   retrySave: () => Promise<void>
   visibleItems: () => CanvasItem[]
   nextZIndex: () => number
 }
 
+// The notebook's own canvas has an empty title; the UI needs something to show.
+export const CANVAS_PAGE_TITLE = 'Canvas'
+
 // --- Pure helpers ----------------------------------------------------------
+
+// Navigation order for the current notebook: its canvas first, then its user pages.
+// `pages` omits the canvas because the pages API hides it, so it is prepended here.
+export function pageSequence(
+  notebooks: Notebook[],
+  currentNotebookId: string | null,
+  pages: PageMeta[],
+): PageMeta[] {
+  const notebook = notebooks.find((nb) => nb.id === currentNotebookId)
+  const canvas = notebook?.pages[0]
+  return canvas ? [canvas, ...pages] : pages
+}
+
+export function pageTitle(page: PageMeta): string {
+  return page.title || CANVAS_PAGE_TITLE
+}
+
 
 function patchItem(
   items: CanvasItem[],
@@ -211,6 +245,7 @@ export const useStore = create<StoreState>()((set, get) => {
     activeItemId: null,
     undoStack: [],
     redoStack: [],
+    trash: [],
     activeError: null,
     saveStatus: 'idle',
 
@@ -461,6 +496,44 @@ export const useStore = create<StoreState>()((set, get) => {
         undoStack: [...state.undoStack, op].slice(-UNDO_LIMIT),
       }))
       scheduleSave(ITEM_SAVE_DEBOUNCE_MS)
+    },
+
+    // --- Trash ------------------------------------------------------------
+
+    loadTrash: async () => {
+      try {
+        set({ trash: await api.listTrash() })
+      } catch (cause) {
+        reportError(cause)
+      }
+    },
+
+    restoreFromTrash: async (itemId, type) => {
+      // Restoring a note rewrites the page file on disk. Any save still queued here
+      // holds the pre-restore items, so it must land first or it would undo the restore.
+      cancelPendingSave()
+      await flushSave()
+      try {
+        await api.restoreTrashItem(itemId, type)
+      } catch (cause) {
+        reportError(cause)
+        return
+      }
+      await get().loadTrash()
+      // A restored notebook or page changes the navigation tree; a restored note
+      // changes the page currently on screen. Reloading both covers every type.
+      await get().loadNotebooks()
+      const { currentNotebookId, currentPageId } = get()
+      if (currentNotebookId && currentPageId) await get().selectPage(currentPageId)
+    },
+
+    purgeFromTrash: async (itemId, type) => {
+      try {
+        await api.purgeTrashItem(itemId, type)
+        set((state) => ({ trash: state.trash.filter((entry) => entry.id !== itemId) }))
+      } catch (cause) {
+        reportError(cause)
+      }
     },
 
     // --- Derived / misc ---------------------------------------------------
