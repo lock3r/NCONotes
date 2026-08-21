@@ -95,10 +95,6 @@ export function deleteNotebook(notebookId: string): Promise<void> {
 
 // --- Pages -----------------------------------------------------------------
 
-export function listPages(notebookId: string): Promise<PageMeta[]> {
-  return apiFetch<PageMeta[]>(`/notebooks/${notebookId}/pages`)
-}
-
 export function createPage(notebookId: string, title: string): Promise<PageMeta> {
   return apiFetch<PageMeta>(`/notebooks/${notebookId}/pages`, {
     method: 'POST',

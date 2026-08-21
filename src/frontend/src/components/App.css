@@ -183,6 +183,20 @@
   font-weight: 500;
 }
 
+/* Sized so the notebook name lines up with the page titles indented beneath it. */
+.sidebar-chevron {
+  flex: 0 0 auto;
+  width: 14px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #777;
+  font-size: 10px;
+  line-height: 1;
+  text-align: left;
+  cursor: pointer;
+}
+
 .page-list .page-row {
   padding-left: 26px;
   font-weight: 400;

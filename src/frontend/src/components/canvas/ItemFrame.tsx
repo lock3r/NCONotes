@@ -18,10 +18,13 @@ interface DragState {
   lastY: number
 }
 
+// A press that travels further than this is a drag or a pan, not a click on the body.
+const CLICK_SLOP_PX = 4
+
 interface Props {
   item: CanvasItem
   children: ReactNode
-  onBodyDoubleClick?: () => void
+  onBodyActivate?: () => void
   onBodyDrop?: (event: React.DragEvent) => void
   bodyClassName?: string
 }
@@ -29,7 +32,7 @@ interface Props {
 export default function ItemFrame({
   item,
   children,
-  onBodyDoubleClick,
+  onBodyActivate,
   onBodyDrop,
   bodyClassName,
 }: Props) {
@@ -43,6 +46,7 @@ export default function ItemFrame({
   const [hovered, setHovered] = useState(false)
   const moveRef = useRef<DragState | null>(null)
   const resizeRef = useRef<DragState | null>(null)
+  const bodyPressRef = useRef<{ x: number; y: number } | null>(null)
 
   function beginGesture(
     ref: React.RefObject<DragState | null>,
@@ -141,11 +145,26 @@ export default function ItemFrame({
 
       <div
         className={bodyClassName ? `item-body ${bodyClassName}` : 'item-body'}
-        onDoubleClick={(event) => {
-          if (!onBodyDoubleClick) return
-          event.stopPropagation()
-          onBodyDoubleClick()
+        onPointerDown={(event) => {
+          bodyPressRef.current = { x: event.clientX, y: event.clientY }
         }}
+        onClick={(event) => {
+          const press = bodyPressRef.current
+          bodyPressRef.current = null
+          if (!onBodyActivate || !press) return
+          // Panning across the item ends in a click here; only a stationary press activates.
+          if (
+            Math.abs(event.clientX - press.x) > CLICK_SLOP_PX ||
+            Math.abs(event.clientY - press.y) > CLICK_SLOP_PX
+          ) {
+            return
+          }
+          // The canvas clears the active item on click; this must be the last word.
+          event.stopPropagation()
+          onBodyActivate()
+        }}
+        // The canvas creates a note on double click, which must not happen on top of one.
+        onDoubleClick={(event) => event.stopPropagation()}
         onDragOver={onBodyDrop ? (event) => event.preventDefault() : undefined}
         onDrop={onBodyDrop}
       >

@@ -66,7 +66,6 @@ interface StoreState {
   notebooks: Notebook[]
   currentNotebookId: string | null
   currentPageId: string | null
-  pages: PageMeta[]
   items: CanvasItem[]
   viewState: ViewState
   activeItemId: string | null
@@ -84,8 +83,8 @@ interface StoreState {
   deleteNotebook: (notebookId: string) => Promise<void>
   selectNotebook: (notebookId: string) => Promise<void>
   selectPage: (pageId: string) => Promise<void>
-  createPage: (title: string) => Promise<void>
-  deletePage: (pageId: string) => Promise<void>
+  createPage: (notebookId: string, title: string) => Promise<void>
+  deletePage: (notebookId: string, pageId: string) => Promise<void>
 
   addTextItem: (x: number, y: number) => string
   addImageItem: (x: number, y: number, imageId: string, width: number, height: number) => string
@@ -112,27 +111,36 @@ interface StoreState {
   nextZIndex: () => number
 }
 
-// The notebook's own canvas has an empty title; the UI needs something to show.
-export const CANVAS_PAGE_TITLE = 'Canvas'
-
 // --- Pure helpers ----------------------------------------------------------
 
-// Navigation order for the current notebook: its canvas first, then its user pages.
-// `pages` omits the canvas because the pages API hides it, so it is prepended here.
+// A notebook's pages in navigation order: its own canvas first, then the pages
+// created inside it.
 export function pageSequence(
   notebooks: Notebook[],
   currentNotebookId: string | null,
-  pages: PageMeta[],
 ): PageMeta[] {
-  const notebook = notebooks.find((nb) => nb.id === currentNotebookId)
-  const canvas = notebook?.pages[0]
-  return canvas ? [canvas, ...pages] : pages
+  return notebooks.find((nb) => nb.id === currentNotebookId)?.pages ?? []
 }
 
-export function pageTitle(page: PageMeta): string {
-  return page.title || CANVAS_PAGE_TITLE
+// The pages a notebook shows beneath itself in the sidebar. The canvas is omitted
+// because the notebook's own row is that page.
+export function childPages(notebook: Notebook): PageMeta[] {
+  return notebook.pages.slice(1)
 }
 
+export function notebookCanvasId(notebook: Notebook): string | undefined {
+  return notebook.pages[0]?.id
+}
+
+function patchNotebookPages(
+  notebooks: Notebook[],
+  notebookId: string,
+  update: (pages: PageMeta[]) => PageMeta[],
+): Notebook[] {
+  return notebooks.map((nb) =>
+    nb.id === notebookId ? { ...nb, pages: update(nb.pages) } : nb,
+  )
+}
 
 function patchItem(
   items: CanvasItem[],
@@ -239,7 +247,6 @@ export const useStore = create<StoreState>()((set, get) => {
     notebooks: [],
     currentNotebookId: null,
     currentPageId: null,
-    pages: [],
     items: [],
     viewState: { ...DEFAULT_VIEW_STATE },
     activeItemId: null,
@@ -281,7 +288,6 @@ export const useStore = create<StoreState>()((set, get) => {
           set({
             currentNotebookId: null,
             currentPageId: null,
-            pages: [],
             items: [],
             activeItemId: null,
             undoStack: [],
@@ -293,20 +299,16 @@ export const useStore = create<StoreState>()((set, get) => {
       }
     },
 
-    // Selecting a notebook opens its own canvas — pages[0], which the pages API hides.
+    // A notebook *is* its first page, so selecting one opens that page.
     selectNotebook: async (notebookId) => {
       const notebook = get().notebooks.find((nb) => nb.id === notebookId)
-      if (!notebook || notebook.pages.length === 0) {
-        set({ activeError: `Notebook ${notebookId} has no canvas page` })
+      const canvasId = notebook && notebookCanvasId(notebook)
+      if (!canvasId) {
+        set({ activeError: `Notebook ${notebookId} has no page` })
         return
       }
-      try {
-        const pages = await api.listPages(notebookId)
-        set({ currentNotebookId: notebookId, pages })
-        await get().selectPage(notebook.pages[0].id)
-      } catch (cause) {
-        reportError(cause)
-      }
+      set({ currentNotebookId: notebookId })
+      await get().selectPage(canvasId)
     },
 
     selectPage: async (pageId) => {
@@ -331,27 +333,34 @@ export const useStore = create<StoreState>()((set, get) => {
       }
     },
 
-    createPage: async (title) => {
-      const notebookId = get().currentNotebookId
-      if (!notebookId) return
+    // The notebook is passed in rather than read from the selection: the sidebar can
+    // show several notebooks expanded at once, so the target is not always the current one.
+    createPage: async (notebookId, title) => {
       try {
         const meta = await api.createPage(notebookId, title)
-        set((state) => ({ pages: [...state.pages, meta] }))
+        set((state) => ({
+          notebooks: patchNotebookPages(state.notebooks, notebookId, (pages) => [...pages, meta]),
+        }))
+        // Creating a page navigates to it, which means switching notebook if needed.
+        set({ currentNotebookId: notebookId })
         await get().selectPage(meta.id)
       } catch (cause) {
         reportError(cause)
       }
     },
 
-    deletePage: async (pageId) => {
-      const notebookId = get().currentNotebookId
-      if (!notebookId) return
+    deletePage: async (notebookId, pageId) => {
       try {
         await api.deletePage(notebookId, pageId)
-        set((state) => ({ pages: state.pages.filter((page) => page.id !== pageId) }))
+        set((state) => ({
+          notebooks: patchNotebookPages(state.notebooks, notebookId, (pages) =>
+            pages.filter((page) => page.id !== pageId),
+          ),
+        }))
         if (get().currentPageId === pageId) {
           const notebook = get().notebooks.find((nb) => nb.id === notebookId)
-          if (notebook) await get().selectPage(notebook.pages[0].id)
+          const canvasId = notebook && notebookCanvasId(notebook)
+          if (canvasId) await get().selectPage(canvasId)
         }
       } catch (cause) {
         reportError(cause)
