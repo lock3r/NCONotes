@@ -44,11 +44,12 @@ export default function Canvas() {
   const setActiveItem = useStore((state) => state.setActiveItem)
   const setError = useStore((state) => state.setError)
 
-  // Deleted items stay in `items` until purged; draw only the live ones, back to front.
-  const visible = useMemo(
-    () => items.filter((item) => !item.deleted_at).sort((a, b) => a.z_index - b.z_index),
-    [items],
-  )
+  // Deleted items stay in `items` until purged; draw only the live ones.
+  //
+  // Stacking is the z-index style on each item, never the DOM order: reordering a node
+  // between pointerdown and pointerup makes the browser drop the click, and raising an
+  // item to the front is exactly what a press on it does.
+  const visible = useMemo(() => items.filter((item) => !item.deleted_at), [items])
 
   const toWorld = useCallback(
     (event: { clientX: number; clientY: number }) => {
